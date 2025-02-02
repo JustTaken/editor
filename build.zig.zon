@@ -1,0 +1,21 @@
+.{
+    .name = "editor",
+    .version = "0.0.1",
+
+    .dependencies = .{
+        .zgl = .{
+            .url = "https://github.com/ziglibs/zgl/archive/d8b25ff8e73de9e3540ee85481981e9ef7ce191b.tar.gz",
+            .hash = "12205cfce3b6a70f152447e39f6f74a4a5f3ccd6abca33ea6aaadb675797dc3329e9",
+        },
+        .@"zig-wayland" = .{
+            .url = "https://github.com/ifreund/zig-wayland/archive/a507358764d209627e6a555104099b0825d8934c.tar.gz",
+            .hash = "12204339bf0ea439f92ad54e220be6d42f15431f3d1cd107fb272d0b19a43d98ab17",
+        },
+    },
+
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
