@@ -96,7 +96,6 @@ pub const OpenGL = struct {
 
     pub fn update(self: *OpenGL) error{InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers}!void {
         gl.clear(.{ .color = true });
-        gl.flush();
 
         if (egl.eglSwapBuffers(self.eglDisplay, self.eglSurface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
