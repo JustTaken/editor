@@ -41,9 +41,8 @@ pub const OpenGL = struct {
 
         var egl_config: egl.EGLConfig = undefined;
         var num_configs: egl.EGLint = 0;
-        const result = egl.eglChooseConfig(self.eglDisplay, &egl_attributes, &egl_config, 1, &num_configs);
 
-        if (result != egl.EGL_TRUE) {
+        if (egl.eglChooseConfig(self.eglDisplay, &egl_attributes, &egl_config, 1, &num_configs) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_ATTRIBUTE => return error.InvalidEglConfig,
                 else => return error.EglConfig,
@@ -78,9 +77,7 @@ pub const OpenGL = struct {
             else => return error.FailedToCreatEglSurface,
         };
 
-        const r = egl.eglMakeCurrent(self.eglDisplay, self.eglSurface, self.eglSurface, self.eglContext);
-
-        if (r == egl.EGL_FALSE) {
+        if (egl.eglMakeCurrent(self.eglDisplay, self.eglSurface, self.eglSurface, self.eglContext) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_ACCESS => return error.EglThreadError,
                 egl.EGL_BAD_MATCH => return error.MismatchedContextOrSurfaces,
