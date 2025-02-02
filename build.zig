@@ -32,6 +32,7 @@ pub fn build(builder: *Build) !void {
 
     // exe.linkSystemLibrary("wayland-client");
     exe.linkSystemLibrary("wayland-egl");
+    exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("EGL");
     exe.linkLibC();
 

@@ -13,10 +13,11 @@ pkgs.mkShell {
     wayland
     wayland-scanner
     wayland-protocols
-    vulkan-loader
+    libxkbcommon
+    libxkbcommon.dev
     pkg-config
   ];
 
-  LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib";
-  C_INCLUDE_PATH = "${pkgs.wayland.dev}/include:${pkgs.libGL.dev}/include";
+  LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib";
+  C_INCLUDE_PATH = "${pkgs.wayland.dev}/include:${pkgs.libGL.dev}/include:${pkgs.libxkbcommon.dev}/include";
 }
