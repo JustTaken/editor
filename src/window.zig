@@ -23,7 +23,7 @@ pub const Window = struct {
     height: u32,
     running: bool,
 
-    pub fn init(self: *Window) !void {
+    pub fn init(self: *Window, width: u32, height: u32) !void {
         self.display = try wl.Display.connect(null);
         self.registry = try self.display.getRegistry();
 
@@ -41,9 +41,18 @@ pub const Window = struct {
 
         if (self.display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 
-        try self.openGL.init(self.display, self.surface);
+        self.width = width;
+        self.height = height;
+
+        try self.openGL.init(width, height, self.display, self.surface);
 
         self.running = true;
+    }
+
+    pub fn draw(self: *Window) !void {
+        try self.openGL.update();
+        if (self.display.dispatch() != .SUCCESS) return error.Dispatch;
+        std.time.sleep(30 * std.time.ns_per_ms);
     }
 
     fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, data: *Window) void {
@@ -109,6 +118,7 @@ pub const Window = struct {
 
                 data.width = @intCast(c.width);
                 data.height = @intCast(c.height);
+                data.openGL.resize(c.width, c.height);
             },
         }
     }

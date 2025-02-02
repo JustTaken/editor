@@ -1,5 +1,5 @@
 const std = @import("std");
-const zgl = @import("zgl");
+const gl = @import("zgl");
 const wl = @import("wayland").client.wl;
 
 const Window = @import("window.zig").Window;
@@ -17,7 +17,7 @@ pub const OpenGL = struct {
     eglWindow: *wl.EglWindow,
     eglSurface: egl.EGLSurface,
 
-    pub fn init(self: *OpenGL, display: *wl.Display, surface: *wl.Surface) !void {
+    pub fn init(self: *OpenGL, width: u32, height: u32, display: *wl.Display, surface: *wl.Surface) !void {
         self.eglDisplay = egl.eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, display, null);
 
         var egl_major: egl.EGLint = 0;
@@ -69,8 +69,8 @@ pub const OpenGL = struct {
             else => return error.FailedToCreateContext,
         };
 
-        try zgl.loadExtensions(void, getProcAddress);
-        self.eglWindow = try wl.EglWindow.create(surface, 600, 400);
+        try gl.loadExtensions(void, getProcAddress);
+        self.eglWindow = try wl.EglWindow.create(surface, @intCast(width), @intCast(height));
         self.eglSurface = egl.eglCreatePlatformWindowSurface(self.eglDisplay, egl_config, self.eglWindow, null) orelse switch (egl.eglGetError()) {
             egl.EGL_BAD_MATCH => return error.MismatchedConfig,
             egl.EGL_BAD_CONFIG => return error.InvalidConfig,
@@ -91,16 +91,25 @@ pub const OpenGL = struct {
             }
         }
 
+        gl.clearColor(1.0, 1.0, 0.5, 1.0);
+    }
+
+    pub fn update(self: *OpenGL) error{InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers}!void {
+        gl.clear(.{ .color = true });
+        gl.flush();
+
         if (egl.eglSwapBuffers(self.eglDisplay, self.eglSurface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_DISPLAY => return error.InvalidDisplay,
-                egl.EGL_BAD_SURFACE => return error.PresentInvalidSurface,
-                egl.EGL_CONTEXT_LOST => return error.EGLContextLost,
-                else => return error.FailedToSwapBuffers,
+                egl.EGL_BAD_SURFACE => return error.InvalidSurface,
+                egl.EGL_CONTEXT_LOST => return error.ContextLost,
+                else => return error.SwapBuffers,
             }
         }
+    }
 
-        if (display.dispatch() != .SUCCESS) return error.Dispatch;
+    pub fn resize(self: *OpenGL, width: i32, height: i32) void {
+        self.eglWindow.resize(width, height, 0, 0);
     }
 
     pub fn deinit(self: *OpenGL) void {
