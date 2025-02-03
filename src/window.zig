@@ -6,7 +6,7 @@ const xdg = wayland.client.xdg;
 
 const Allocator = std.mem.Allocator;
 
-const Renderer = @import("renderer.zig").OpenGL;
+const Renderer = @import("opengl/root.zig").OpenGL;
 const Input = @import("input.zig").Xkbcommon;
 
 pub const Window = struct {
@@ -57,6 +57,10 @@ pub const Window = struct {
         );
 
         self.running = true;
+    }
+
+    pub fn clear(self: *Window) void {
+        self.renderer.clear();
     }
 
     pub fn draw(self: *Window) !void {
@@ -141,8 +145,8 @@ fn keyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *Win
         .key => |k| data.input.handle(k.key, k.state),
         .modifiers => |m| data.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
         .repeat_info => |i| data.input.repeatInfo(i.rate, i.delay),
-        .enter => |e| std.debug.print("Enter: {}\n", .{e}),
-        .leave => |l| std.debug.print("Leave: {}\n", .{l}),
+        .enter => |_| {},
+        .leave => |_| {},
         .keymap => |k| {
             defer std.posix.close(k.fd);
 

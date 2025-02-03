@@ -30,7 +30,8 @@ pub fn build(builder: *Build) !void {
     exe.root_module.addImport("wayland", wayland);
     exe.root_module.addImport("zgl", zgl.module("zgl"));
 
-    // exe.linkSystemLibrary("wayland-client");
+    exe.addCSourceFile(.{ .file = builder.path("assets/stb.c") });
+
     exe.linkSystemLibrary("wayland-egl");
     exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("EGL");

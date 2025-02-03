@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const Window = @import("window.zig").Window;
-const OpenGL = @import("renderer.zig").OpenGL;
 
 pub fn main() !void {
     const buffer = try std.heap.page_allocator.alloc(u8, 1 * std.mem.page_size);
@@ -15,6 +14,7 @@ pub fn main() !void {
 
 
     while (window.running) {
+        window.clear();
         try window.draw();
     }
     // try OpenGL.init();

@@ -1,129 +1,25 @@
 const std = @import("std");
 const gl = @import("zgl");
 const wl = @import("wayland").client.wl;
-
-const Window = @import("window.zig").Window;
+const shader = @import("shader.zig");
 
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const FixedAllocator = std.heap.FixedBufferAllocator;
-const GeometryMap = std.EnumMap(GeometryKind, Geometry);
+
+const Program = shader.Program;
+const Uniform = shader.Uniform;
+const Data = @import("data.zig").Data;
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
     @cInclude("EGL/eglext.h");
 });
 
-const Vertex = struct {
-    data: [3]f32,
-
-    const Stride: u32 = 3 * @sizeOf(f32);
-
-    fn new(x: f32, y: f32, z: f32) Vertex {
-        return Vertex{
-            .data = .{
-                x,
-                y,
-                z,
-            },
-        };
-    }
-};
-
-pub const Geometry = struct {
-    array: gl.VertexArray,
-    buffer: gl.Buffer,
-    size: u32,
-
-    fn new(comptime N: u32, vertices: [N]Vertex) Geometry {
-        var self: Geometry = undefined;
-
-        self.size = N;
-        self.array = gl.VertexArray.create();
-        self.array.bind();
-
-        self.buffer = gl.Buffer.create();
-
-        self.buffer.bind(.array_buffer);
-        self.buffer.data(Vertex, &vertices, .static_draw);
-
-        gl.vertexAttribPointer(0, N, .float, false, Vertex.Stride, 0);
-        gl.enableVertexAttribArray(0);
-
-        return self;
-    }
-
-    fn draw(self: *const Geometry) void {
-        self.array.bind();
-        gl.drawArrays(.triangles, 0, self.size);
-    }
-};
-
-pub const GeometryKind = enum {
-    Triangle,
-};
-
-const Program = struct {
-    handle: gl.Program,
-    vertex: gl.Shader,
-    fragment: gl.Shader,
-
-    geometries: GeometryMap,
-
-    fn new(
-        vertPath: []const u8,
-        fragPath: []const u8,
-        geometries: GeometryMap,
-        allocator: Allocator,
-    ) error{ Read, Compile, OutOfMemory }!Program {
-        var self: Program = undefined;
-
-        const buffer = try allocator.alloc(u8, 1024);
-        defer allocator.free(buffer);
-
-        self.handle = gl.Program.create();
-
-        self.vertex = try shader(.vertex, vertPath, buffer);
-        self.fragment = try shader(.fragment, fragPath, buffer);
-
-        self.handle.attach(self.vertex);
-        self.handle.attach(self.fragment);
-
-        self.geometries = geometries;
-
-        self.handle.link();
-
-        return self;
-    }
-
-    fn shader(kind: gl.ShaderType, path: []const u8, buffer: []u8) error{ Read, Compile }!gl.Shader {
-        const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
-
-        const self = gl.Shader.create(kind);
-
-        self.source(1, &source);
-        self.compile();
-
-        if (0 == self.get(.compile_status)) {
-            return error.Compile;
-        }
-
-        return self;
-    }
-
-    fn draw(self: *Program, kind: GeometryKind) void {
-        self.handle.use();
-
-        const triangle = self.geometries.get(kind) orelse @panic("Failed to find trinangle geometry");
-
-        triangle.draw();
-    }
-
-    fn deinit(self: *const Program) void {
-        self.vertex.delete();
-        self.fragment.delete();
-        self.handle.delete();
-    }
+const VertexData = struct {
+    position: [3]f32,
+    color: [3]f32,
+    texture: [2]f32,
 };
 
 pub const OpenGL = struct {
@@ -209,8 +105,8 @@ pub const OpenGL = struct {
         }
 
         const contextAttributes = [_]egl.EGLint{
-            egl.EGL_CONTEXT_MAJOR_VERSION, 4,
-            egl.EGL_CONTEXT_MINOR_VERSION, 6,
+            egl.EGL_CONTEXT_MAJOR_VERSION,       4,
+            egl.EGL_CONTEXT_MINOR_VERSION,       6,
             egl.EGL_CONTEXT_OPENGL_PROFILE_MASK, egl.EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
             egl.EGL_NONE,
         };
@@ -242,15 +138,26 @@ pub const OpenGL = struct {
 
         self.programs.append(
             try Program.new(
-                "assets/vertex.glsl",
-                "assets/fragment.glsl",
-                GeometryMap.init(.{
-                    .Triangle = Geometry.new(3, .{
-                        Vertex.new(-1.0, 1.0, 0.0),
-                        Vertex.new(1.0, 1.0, 0.0),
-                        Vertex.new(0.0, -1.0, 0.0),
-                    }),
-                }),
+                try Data.new(
+                    VertexData,
+                    &.{
+                        .{ .position = .{ 0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 }, .texture = .{ 1.0, 1.0 } },
+                        .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 }, .texture = .{ 1.0, 0.0 } },
+                        .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 }, .texture = .{ 0.0, 0.0 } },
+                        .{ .position = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 1.0 }, .texture = .{ 0.0, 1.0 } },
+                    },
+                    &.{
+                        0, 1, 3,
+                        1, 2, 3,
+                    },
+                    &.{},
+                    &.{
+                        .{ .path = "assets/container.jpg", .name = "textureSampler" },
+                        .{ .path = "assets/awesomeface.png", .name = "textureSampler2" },
+                    },
+                    fixedAllocator,
+                ),
+                .{ "assets/vertex.glsl", "assets/fragment.glsl" },
                 fixedAllocator,
             ),
         ) catch return error.OutOfMemory;
@@ -258,17 +165,20 @@ pub const OpenGL = struct {
         self.width = width;
         self.height = height;
 
+        gl.viewport(0, 0, width, height);
+        gl.scissor(0, 0, width, height);
         gl.clearColor(1.0, 1.0, 0.5, 1.0);
     }
 
     pub fn drawTriangle(self: *OpenGL) void {
-        self.programs.items[0].draw(.Triangle);
+        self.programs.items[0].draw();
+    }
+
+    pub fn clear(_: *OpenGL) void {
+        gl.clear(.{ .color = true });
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
-        gl.clearColor(1.0, 0.0, 0.0, 1.0);
-        gl.clear(.{ .color = true });
-
         self.drawTriangle();
 
         if (egl.eglSwapBuffers(self.display, self.surface) != egl.EGL_TRUE) {

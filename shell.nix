@@ -16,8 +16,9 @@ pkgs.mkShell {
     libxkbcommon
     libxkbcommon.dev
     pkg-config
+    stb
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib";
-  C_INCLUDE_PATH = "${pkgs.wayland.dev}/include:${pkgs.libGL.dev}/include:${pkgs.libxkbcommon.dev}/include";
+  C_INCLUDE_PATH = "${pkgs.wayland.dev}/include:${pkgs.libGL.dev}/include:${pkgs.libxkbcommon.dev}/include:${pkgs.stb}/include";
 }
