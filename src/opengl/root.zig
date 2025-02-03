@@ -9,7 +9,6 @@ const FixedAllocator = std.heap.FixedBufferAllocator;
 
 const Program = shader.Program;
 const Uniform = shader.Uniform;
-const Data = @import("data.zig").Data;
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
@@ -138,25 +137,22 @@ pub const OpenGL = struct {
 
         self.programs.append(
             try Program.new(
-                try Data.new(
-                    VertexData,
-                    &.{
-                        .{ .position = .{ 0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 }, .texture = .{ 1.0, 1.0 } },
-                        .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 }, .texture = .{ 1.0, 0.0 } },
-                        .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 }, .texture = .{ 0.0, 0.0 } },
-                        .{ .position = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 1.0 }, .texture = .{ 0.0, 1.0 } },
-                    },
-                    &.{
-                        0, 1, 3,
-                        1, 2, 3,
-                    },
-                    &.{},
-                    &.{
-                        .{ .path = "assets/container.jpg", .name = "textureSampler" },
-                        .{ .path = "assets/awesomeface.png", .name = "textureSampler2" },
-                    },
-                    fixedAllocator,
-                ),
+                VertexData,
+                &.{
+                    .{ .position = .{ 0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 }, .texture = .{ 1.0, 1.0 } },
+                    .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 }, .texture = .{ 1.0, 0.0 } },
+                    .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 }, .texture = .{ 0.0, 0.0 } },
+                    .{ .position = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 1.0 }, .texture = .{ 0.0, 1.0 } },
+                },
+                &.{
+                    0, 1, 3,
+                    1, 2, 3,
+                },
+                &.{},
+                &.{
+                    .{ .path = "assets/container.jpg", .name = "textureSampler" },
+                    .{ .path = "assets/awesomeface.png", .name = "textureSampler2" },
+                },
                 .{ "assets/vertex.glsl", "assets/fragment.glsl" },
                 fixedAllocator,
             ),
@@ -168,6 +164,8 @@ pub const OpenGL = struct {
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
         gl.clearColor(1.0, 1.0, 0.5, 1.0);
+
+        self.programs.items[0].record();
     }
 
     pub fn drawTriangle(self: *OpenGL) void {
@@ -208,10 +206,13 @@ pub const OpenGL = struct {
             program.deinit();
         }
 
+        if (egl.eglMakeCurrent(self.display, egl.EGL_NO_SURFACE, egl.EGL_NO_SURFACE, egl.EGL_NO_CONTEXT) != egl.EGL_TRUE) std.log.err("Failed to unbound egl context", .{});
+        if (egl.EGL_TRUE != egl.eglDestroyContext(self.display, self.context)) std.log.err("Failed to destroy egl context", .{});
+
         if (egl.EGL_TRUE != egl.eglDestroySurface(self.display, self.surface)) std.log.err("Failed to destroy egl surface", .{});
+
         self.window.destroy();
 
-        if (egl.EGL_TRUE != egl.eglDestroyContext(self.display, self.context)) std.log.err("Failed to destroy egl context", .{});
         if (egl.EGL_TRUE != egl.eglTerminate(self.display)) std.log.err("Failed to terminate egl", .{});
     }
 };
