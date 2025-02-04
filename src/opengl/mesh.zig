@@ -2,6 +2,7 @@ const std = @import("std");
 const gl = @import("zgl");
 
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 
 const Texture = @import("texture.zig").Texture;
 
@@ -12,23 +13,24 @@ const VertexInfo = struct {
     offset: u32,
 };
 
-pub const Data = struct {
+pub const Mesh = struct {
     array: gl.VertexArray,
     vertex: gl.Buffer,
     index: gl.Buffer,
 
     vertexInfos: []VertexInfo,
+    textures: ArrayList(*Texture),
 
     size: usize,
 
-    pub fn new(
+    pub fn init(
+        self: *Mesh,
         comptime T: type,
         vertices: []const T,
         indices: []const u32,
         allocator: Allocator,
-    ) error{OutOfMemory}!Data {
-        var self: Data = undefined;
-
+    ) error{OutOfMemory}!void {
+        self.textures = try ArrayList(*Texture).initCapacity(allocator, 2);
         self.array = gl.genVertexArray();
 
         var buffers: [2]gl.Buffer = undefined;
@@ -42,8 +44,8 @@ pub const Data = struct {
         self.index.bind(.element_array_buffer);
         self.index.data(u32, indices, .static_draw);
 
-        gl.bindBuffer(@enumFromInt(0), .array_buffer);
-        gl.bindBuffer(@enumFromInt(0), .element_array_buffer);
+        gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
+        gl.bindBuffer(gl.Buffer.invalid, .element_array_buffer);
 
         const fields = @typeInfo(T).Struct.fields;
         self.vertexInfos = try allocator.alloc(VertexInfo, fields.len);
@@ -61,38 +63,6 @@ pub const Data = struct {
         }
 
         self.size = indices.len;
-
-        return self;
-    }
-
-    pub fn startRecord(self: *Data) void {
-        gl.bindVertexArray(self.array);
-    }
-
-    pub fn bindIndex(self: *Data) void {
-        gl.bindBuffer(self.index, .element_array_buffer);
-    }
-
-    pub fn bindVertex(self: *Data) void {
-        gl.bindBuffer(self.vertex, .array_buffer);
-
-        for (self.vertexInfos, 0..) |info, i| {
-            gl.vertexAttribPointer(@intCast(i), info.size, info.typ, false, info.stride, info.offset);
-            gl.enableVertexAttribArray(@intCast(i));
-        }
-    }
-
-    pub fn bindTextures(_: *Data, textures: []const Texture) void {
-        for (textures, 0..) |tex, index| {
-            gl.activeTexture(@enumFromInt(index + @intFromEnum(gl.TextureUnit.texture_0)));
-            gl.bindTexture(tex.handle, .@"2d");
-
-            gl.uniform1i(tex.loc, @intCast(index));
-        }
-    }
-
-    pub fn stopRecord(_: *Data) void {
-        gl.bindVertexArray(@enumFromInt(0));
     }
 
     fn getGlType(comptime T: type) gl.Type {
@@ -124,14 +94,40 @@ pub const Data = struct {
         }
     }
 
-    pub fn use(self: *Data) void {
-        self.array.bind();
-
-        gl.drawElements(.triangles, self.size, .unsigned_int, 0);
-        gl.bindVertexArray(@enumFromInt(0));
+    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
+        try self.textures.append(texture);
     }
 
-    pub fn deinit(self: *const Data) void {
+    pub fn configure(self: *Mesh) void {
+        gl.bindVertexArray(self.array);
+
+        gl.bindBuffer(self.index, .element_array_buffer);
+        gl.bindBuffer(self.vertex, .array_buffer);
+
+        for (self.vertexInfos, 0..) |info, i| {
+            gl.vertexAttribPointer(@intCast(i), info.size, info.typ, false, info.stride, info.offset);
+            gl.enableVertexAttribArray(@intCast(i));
+        }
+
+        for (self.textures.items, 0..) |tex, index| {
+            gl.activeTexture(@enumFromInt(index + @intFromEnum(gl.TextureUnit.texture_0)));
+            gl.bindTexture(tex.handle, .@"2d");
+
+            gl.uniform1i(tex.loc, @intCast(index));
+        }
+
+        gl.bindVertexArray(gl.VertexArray.invalid);
+    }
+
+    pub fn draw(self: *Mesh) void {
+        gl.bindVertexArray(self.array);
+
+        gl.drawElements(.triangles, self.size, .unsigned_int, 0);
+
+        gl.bindVertexArray(gl.VertexArray.invalid);
+    }
+
+    pub fn deinit(self: *const Mesh) void {
         self.vertex.delete();
         self.index.delete();
         self.array.delete();

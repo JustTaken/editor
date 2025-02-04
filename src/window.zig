@@ -1,12 +1,13 @@
 const std = @import("std");
 const wayland = @import("wayland");
+const renderer = @import("opengl/root.zig");
 
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 
 const Allocator = std.mem.Allocator;
 
-const Renderer = @import("opengl/root.zig").OpenGL;
+const Renderer = renderer.OpenGL;
 const Input = @import("input.zig").Xkbcommon;
 
 pub const Window = struct {
@@ -59,11 +60,15 @@ pub const Window = struct {
         self.running = true;
     }
 
+    pub fn newShader(self: *Window, vertex: []const u8, fragment: []const u8) error{ Read, Compile, NotFound, OutOfMemory }!*renderer.Program {
+        return try self.renderer.addShader(vertex, fragment);
+    }
+
     pub fn clear(self: *Window) void {
         self.renderer.clear();
     }
 
-    pub fn draw(self: *Window) !void {
+    pub fn update(self: *Window) !void {
         try self.renderer.render();
         if (self.display.dispatch() != .SUCCESS) return error.Dispatch;
 

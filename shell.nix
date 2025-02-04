@@ -17,6 +17,7 @@ pkgs.mkShell {
     libxkbcommon.dev
     pkg-config
     stb
+    gdb
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib";

@@ -7,19 +7,14 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const FixedAllocator = std.heap.FixedBufferAllocator;
 
-const Program = shader.Program;
 const Uniform = shader.Uniform;
+pub const Program = shader.Program;
+pub const TextureInfo = shader.TextureInfo;
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
     @cInclude("EGL/eglext.h");
 });
-
-const VertexData = struct {
-    position: [3]f32,
-    color: [3]f32,
-    texture: [2]f32,
-};
 
 pub const OpenGL = struct {
     window: *wl.EglWindow,
@@ -30,7 +25,7 @@ pub const OpenGL = struct {
     width: u32,
     height: u32,
 
-    programs: ArrayList(Program),
+    // programs: ArrayList(Program),
 
     allocator: FixedAllocator,
 
@@ -104,8 +99,8 @@ pub const OpenGL = struct {
         }
 
         const contextAttributes = [_]egl.EGLint{
-            egl.EGL_CONTEXT_MAJOR_VERSION,       4,
-            egl.EGL_CONTEXT_MINOR_VERSION,       6,
+            egl.EGL_CONTEXT_MAJOR_VERSION,       3,
+            egl.EGL_CONTEXT_MINOR_VERSION,       3,
             egl.EGL_CONTEXT_OPENGL_PROFILE_MASK, egl.EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
             egl.EGL_NONE,
         };
@@ -130,33 +125,14 @@ pub const OpenGL = struct {
 
         try gl.loadExtensions(void, getProcAddress);
 
+        gl.enable(.debug_output);
+        gl.enable(.debug_output_synchronous);
+        gl.debugMessageCallback({}, errorCallback);
+
         self.allocator = FixedAllocator.init(try allocator.alloc(u8, 4096));
-        const fixedAllocator = self.allocator.allocator();
+        // const fixedAllocator = self.allocator.allocator();
 
-        self.programs = try ArrayList(Program).initCapacity(fixedAllocator, 2);
-
-        self.programs.append(
-            try Program.new(
-                VertexData,
-                &.{
-                    .{ .position = .{ 0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 }, .texture = .{ 1.0, 1.0 } },
-                    .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 }, .texture = .{ 1.0, 0.0 } },
-                    .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 }, .texture = .{ 0.0, 0.0 } },
-                    .{ .position = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 1.0 }, .texture = .{ 0.0, 1.0 } },
-                },
-                &.{
-                    0, 1, 3,
-                    1, 2, 3,
-                },
-                &.{},
-                &.{
-                    .{ .path = "assets/container.jpg", .name = "textureSampler" },
-                    .{ .path = "assets/awesomeface.png", .name = "textureSampler2" },
-                },
-                .{ "assets/vertex.glsl", "assets/fragment.glsl" },
-                fixedAllocator,
-            ),
-        ) catch return error.OutOfMemory;
+        // self.programs = try ArrayList(Program).initCapacity(fixedAllocator, 2);
 
         self.width = width;
         self.height = height;
@@ -164,12 +140,14 @@ pub const OpenGL = struct {
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
         gl.clearColor(1.0, 1.0, 0.5, 1.0);
-
-        self.programs.items[0].record();
     }
 
-    pub fn drawTriangle(self: *OpenGL) void {
-        self.programs.items[0].draw();
+    pub fn addShader(self: *OpenGL, vertex: []const u8, fragment: []const u8) error{ Read, Compile, OutOfMemory }!*Program{
+        const program = try self.allocator.allocator().create(Program);
+
+        program.* = try Program.new(vertex, fragment, self.allocator.allocator());
+
+        return program;
     }
 
     pub fn clear(_: *OpenGL) void {
@@ -177,8 +155,6 @@ pub const OpenGL = struct {
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
-        self.drawTriangle();
-
         if (egl.eglSwapBuffers(self.display, self.surface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_DISPLAY => return error.InvalidDisplay,
@@ -202,10 +178,6 @@ pub const OpenGL = struct {
     }
 
     pub fn deinit(self: *OpenGL) void {
-        for (self.programs.items) |program| {
-            program.deinit();
-        }
-
         if (egl.eglMakeCurrent(self.display, egl.EGL_NO_SURFACE, egl.EGL_NO_SURFACE, egl.EGL_NO_CONTEXT) != egl.EGL_TRUE) std.log.err("Failed to unbound egl context", .{});
         if (egl.EGL_TRUE != egl.eglDestroyContext(self.display, self.context)) std.log.err("Failed to destroy egl context", .{});
 
@@ -220,3 +192,9 @@ pub const OpenGL = struct {
 fn getProcAddress(_: type, proc: [:0]const u8) ?*const anyopaque {
     return @ptrCast(egl.eglGetProcAddress(proc));
 }
+
+fn errorCallback(source: gl.DebugSource, msg_type: gl.DebugMessageType, id: usize, severity: gl.DebugSeverity, message: []const u8) void {
+    std.debug.print("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}\n", .{source, msg_type, id, severity, message});
+    
+}
+

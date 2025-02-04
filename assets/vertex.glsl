@@ -7,8 +7,10 @@ layout (location = 2) in vec2 vTexture;
 out vec3 outColor;
 out vec2 outTexture;
 
+uniform mat4 myTransformMatrix;
+
 void main() {
-    gl_Position = vec4(vPos, 1.f);
+    gl_Position = myTransformMatrix * vec4(vPos, 1.f);
     outColor = vColor;
     outTexture = vTexture;
 }
