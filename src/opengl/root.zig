@@ -165,7 +165,9 @@ pub const OpenGL = struct {
         }
     }
 
-    pub fn resize(self: *OpenGL, width: i32, height: i32) void {
+    pub fn resize(ptr: *anyopaque, width: i32, height: i32) void {
+        const self: *OpenGL = @ptrCast(@alignCast(ptr));
+
         if (width == 0 or height == 0) return;
         if (width == self.width and height == self.height) return;
 
@@ -173,6 +175,7 @@ pub const OpenGL = struct {
         self.height = @intCast(height);
 
         self.window.resize(width, height, 0, 0);
+
         gl.viewport(0, 0, self.width, self.height);
         gl.scissor(0, 0, self.width, self.height);
     }
@@ -195,6 +198,5 @@ fn getProcAddress(_: type, proc: [:0]const u8) ?*const anyopaque {
 
 fn errorCallback(source: gl.DebugSource, msg_type: gl.DebugMessageType, id: usize, severity: gl.DebugSeverity, message: []const u8) void {
     std.debug.print("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}\n", .{source, msg_type, id, severity, message});
-    
 }
 

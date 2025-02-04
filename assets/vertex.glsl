@@ -10,7 +10,7 @@ out vec2 outTexture;
 uniform mat4 myTransformMatrix;
 
 void main() {
-    gl_Position = myTransformMatrix * vec4(vPos, 1.f);
+    gl_Position = vec4(vPos, 1.0f) * myTransformMatrix;
     outColor = vColor;
     outTexture = vTexture;
 }

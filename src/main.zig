@@ -1,19 +1,17 @@
 const std = @import("std");
+const math = @import("math.zig");
+
+const Matrix = math.Matrix;
+const Vec = math.Vec;
+
 const Window = @import("window.zig").Window;
 
 pub const error_handling = .log;
 
 const VertexData = struct {
-    position: [3]f32,
-    color: [3]f32,
-    texture: [2]f32,
-};
-
-const transformMatrix: [4][4]f32 = .{
-    .{ 1.0, 0.0, 0.0, 0.0},
-    .{ 0.0, 1.0, 0.0, 0.0},
-    .{ 0.0, 0.0, 1.0, 0.0},
-    .{ 0.0, 0.0, 0.0, 1.0},
+    position: Vec(3),
+    color: Vec(3),
+    texture: Vec(2),
 };
 
 pub fn main() !void {
@@ -32,15 +30,18 @@ pub fn main() !void {
     const texture = try shader.newTexture("textureSampler1", "assets/container.jpg");
     defer texture.deinit();
 
-    const transformUniform = try shader.newUniform("myTransformMatrix", .mat4);
+    const smileTexture = try shader.newTexture("textureSampler2", "assets/awesomeface.png");
+    defer smileTexture.deinit();
+
+    const transformUniform = try shader.newUniform("myTransformMatrix", .MatrixF32, 4);
 
     const rectangle = try shader.newMesh(
         VertexData,
         &.{
-            .{ .position = .{ 0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 }, .texture = .{ 2.2, 0.0 } },
-            .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 }, .texture = .{ 2.2, 2.2 } },
-            .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 }, .texture = .{ 0.0, 2.2 } },
-            .{ .position = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 0.0, 1.0 }, .texture = .{ 0.0, 0.0 } },
+            .{ .position = Vec(3).init(.{ 0.5, 0.5, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
+            .{ .position = Vec(3).init(.{ 0.5, -0.5, 0.0 }), .color = Vec(3).init(.{ 0.0, 1.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 1.0 }) },
+            .{ .position = Vec(3).init(.{ -0.5, -0.5, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
+            .{ .position = Vec(3).init(.{ -0.5, 0.5, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 0.0 }) },
         },
         &.{
             0, 1, 3,
@@ -50,16 +51,17 @@ pub fn main() !void {
     defer rectangle.deinit();
 
     try rectangle.addTexture(texture);
+    try rectangle.addTexture(smileTexture);
 
     shader.start();
 
-    transformUniform.update(.mat4, transformMatrix);
+    transformUniform.update(Matrix(4).rotate(math.rad(90), Vec(3).init(.{0.0, 0.0, 0.1})));
 
     rectangle.configure();
 
     shader.end();
 
-    while (window.running) {
+    while (window.isRunning()) {
         window.clear();
 
         shader.start();

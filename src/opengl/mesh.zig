@@ -51,8 +51,8 @@ pub const Mesh = struct {
         self.vertexInfos = try allocator.alloc(VertexInfo, fields.len);
 
         inline for (fields, 0..) |field, i| {
-            var size: u32 = 1;
-            const typ = getType(field.type, &size);
+            const size: u32 = field.type.size();
+            const typ = getGlType(field.type.inner());
 
             self.vertexInfos[i] = .{
                 .size = size,

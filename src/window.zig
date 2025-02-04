@@ -1,30 +1,16 @@
 const std = @import("std");
-const wayland = @import("wayland");
-const renderer = @import("opengl/root.zig");
 
-const wl = wayland.client.wl;
-const xdg = wayland.client.xdg;
+const renderer = @import("opengl/root.zig");
+const display = @import("wayland/root.zig");
 
 const Allocator = std.mem.Allocator;
 
 const Renderer = renderer.OpenGL;
-const Input = @import("input.zig").Xkbcommon;
+const Display = display.Wayland;
 
 pub const Window = struct {
-    display: *wl.Display,
-    registry: *wl.Registry,
-    seat: *wl.Seat,
-    compositor: *wl.Compositor,
-    surface: *wl.Surface,
-    wmBase: *xdg.WmBase,
-    wmSurface: *xdg.Surface,
-    toplevel: *xdg.Toplevel,
-    keyboard: *wl.Keyboard,
-
+    display: Display,
     renderer: Renderer,
-    input: Input,
-
-    running: bool,
 
     pub fn init(
         self: *Window,
@@ -32,32 +18,20 @@ pub const Window = struct {
         height: u32,
         allocator: Allocator,
     ) !void {
-        self.display = try wl.Display.connect(null);
-        self.registry = try self.display.getRegistry();
+        self.display.resizeCallbackFn = Renderer.resize;
+        self.display.resizeCallbackListener = &self.renderer;
 
-        self.registry.setListener(*Window, registryListener, self);
-
-        if (self.display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
-
-        self.wmSurface = try self.wmBase.getXdgSurface(self.surface);
-        self.wmSurface.setListener(*Window, wmSurfaceListener, self);
-
-        self.toplevel = try self.wmSurface.getToplevel();
-        self.toplevel.setListener(*Window, toplevelListener, self);
-
-        self.surface.commit();
-
-        if (self.display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
+        try self.display.init();
 
         try self.renderer.init(
             width,
             height,
-            self.display,
-            self.surface,
+            self.display.getHandle(),
+            self.display.getSurface(),
             allocator,
         );
 
-        self.running = true;
+        self.display.running = true;
     }
 
     pub fn newShader(self: *Window, vertex: []const u8, fragment: []const u8) error{ Read, Compile, NotFound, OutOfMemory }!*renderer.Program {
@@ -68,97 +42,23 @@ pub const Window = struct {
         self.renderer.clear();
     }
 
+    pub fn isRunning(self: *const Window) bool {
+        return self.display.running;
+    }
+
     pub fn update(self: *Window) !void {
         try self.renderer.render();
-        if (self.display.dispatch() != .SUCCESS) return error.Dispatch;
+        try self.display.update();
 
         sleep(30);
     }
 
     pub fn deinit(self: *Window) void {
         self.renderer.deinit();
-        self.keyboard.release();
-        self.toplevel.destroy();
-        self.wmSurface.destroy();
-        self.wmBase.destroy();
-        self.surface.destroy();
-        self.compositor.destroy();
-        self.registry.destroy();
-        self.display.disconnect();
+        self.display.deinit();
     }
 };
 
 fn sleep(ms: u32) void {
     std.time.sleep(ms * std.time.ns_per_ms);
-}
-
-fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, data: *Window) void {
-    switch (event) {
-        .global => |global| {
-            if (std.mem.orderZ(u8, global.interface, wl.Seat.interface.name) == .eq) {
-                data.seat = registry.bind(global.name, wl.Seat, global.version) catch return;
-                data.seat.setListener(*Window, seatListener, data);
-            } else if (std.mem.orderZ(u8, global.interface, wl.Compositor.interface.name) == .eq) {
-                data.compositor = registry.bind(global.name, wl.Compositor, global.version) catch return;
-                data.surface = data.compositor.createSurface() catch return;
-            } else if (std.mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
-                data.wmBase = registry.bind(global.name, xdg.WmBase, global.version) catch return;
-                data.wmBase.setListener(*Window, wmBaseListener, data);
-            }
-        },
-        .global_remove => {},
-    }
-}
-
-fn seatListener(seat: *wl.Seat, event: wl.Seat.Event, data: *Window) void {
-    switch (event) {
-        .name => {},
-        .capabilities => |d| {
-            if (!d.capabilities.keyboard) @panic("Do not support keyboard");
-
-            data.keyboard = seat.getKeyboard() catch @panic("Failed to get keyboard");
-            data.keyboard.setListener(*Window, keyboardListener, data);
-        },
-    }
-}
-
-fn wmBaseListener(wmBase: *xdg.WmBase, event: xdg.WmBase.Event, _: *Window) void {
-    switch (event) {
-        .ping => |p| wmBase.pong(p.serial),
-    }
-}
-
-fn wmSurfaceListener(wmSurface: *xdg.Surface, event: xdg.Surface.Event, _: *Window) void {
-    switch (event) {
-        .configure => |c| wmSurface.ackConfigure(c.serial),
-    }
-}
-
-fn toplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, data: *Window) void {
-    switch (event) {
-        .close => data.running = false,
-        .wm_capabilities => |c| _ = c,
-        .configure_bounds => |c| _ = c,
-        .configure => |c| data.renderer.resize(c.width, c.height),
-    }
-}
-
-fn keyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *Window) void {
-    _ = keyboard;
-
-    switch (event) {
-        .key => |k| data.input.handle(k.key, k.state),
-        .modifiers => |m| data.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
-        .repeat_info => |i| data.input.repeatInfo(i.rate, i.delay),
-        .enter => |_| {},
-        .leave => |_| {},
-        .keymap => |k| {
-            defer std.posix.close(k.fd);
-
-            const file = std.posix.mmap(null, k.size, std.posix.PROT.READ, .{ .TYPE = .PRIVATE }, k.fd, 0) catch @panic("Failed to open file");
-            defer std.posix.munmap(file);
-
-            data.input.init(@ptrCast(file), k.format) catch @panic("Failed to initialize keymap");
-        },
-    }
 }
