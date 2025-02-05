@@ -4,6 +4,7 @@ const gl = @import("zgl");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
+const Program = @import("shader.zig").Program;
 const Texture = @import("texture.zig").Texture;
 
 const VertexInfo = struct {
@@ -14,6 +15,7 @@ const VertexInfo = struct {
 };
 
 pub const Mesh = struct {
+    program: *Program,
     array: gl.VertexArray,
     vertex: gl.Buffer,
     index: gl.Buffer,
@@ -21,16 +23,20 @@ pub const Mesh = struct {
     vertexInfos: []VertexInfo,
     textures: ArrayList(*Texture),
 
-    size: usize,
+    size: u32,
+    isUpdated: bool,
 
     pub fn init(
         self: *Mesh,
         comptime T: type,
+        program: *Program,
         vertices: []const T,
         indices: []const u32,
         allocator: Allocator,
     ) error{OutOfMemory}!void {
         self.textures = try ArrayList(*Texture).initCapacity(allocator, 2);
+        self.program = program;
+        self.isUpdated = true;
         self.array = gl.genVertexArray();
 
         var buffers: [2]gl.Buffer = undefined;
@@ -62,7 +68,9 @@ pub const Mesh = struct {
             };
         }
 
-        self.size = indices.len;
+        self.size = @intCast(indices.len);
+
+        self.configure();
     }
 
     fn getGlType(comptime T: type) gl.Type {
@@ -94,11 +102,20 @@ pub const Mesh = struct {
         }
     }
 
-    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
-        try self.textures.append(texture);
+    fn configure(self: *Mesh) void {
+        if (!self.isUpdated) return;
+
+        self.isUpdated = false;
+        self.program.meshUpdates.append(self) catch @panic("Buy ram lol");
     }
 
-    pub fn configure(self: *Mesh) void {
+    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
+        try self.textures.append(texture);
+
+        self.configure();
+    }
+
+    pub fn update(self: *Mesh) void {
         gl.bindVertexArray(self.array);
 
         gl.bindBuffer(self.index, .element_array_buffer);
@@ -117,6 +134,7 @@ pub const Mesh = struct {
         }
 
         gl.bindVertexArray(gl.VertexArray.invalid);
+        self.isUpdated = true;
     }
 
     pub fn draw(self: *Mesh) void {

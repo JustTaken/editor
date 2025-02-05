@@ -25,8 +25,6 @@ pub const OpenGL = struct {
     width: u32,
     height: u32,
 
-    // programs: ArrayList(Program),
-
     allocator: FixedAllocator,
 
     pub fn init(
@@ -130,9 +128,6 @@ pub const OpenGL = struct {
         gl.debugMessageCallback({}, errorCallback);
 
         self.allocator = FixedAllocator.init(try allocator.alloc(u8, 4096));
-        // const fixedAllocator = self.allocator.allocator();
-
-        // self.programs = try ArrayList(Program).initCapacity(fixedAllocator, 2);
 
         self.width = width;
         self.height = height;

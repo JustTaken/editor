@@ -7,7 +7,7 @@ pub fn rad(degree: f32) f32 {
     return TO_RAD * degree;
 }
 
-pub const GroupType = enum {
+pub const GroupType = enum(u8) {
     VecF32,
     MatrixF32,
 };
@@ -162,20 +162,22 @@ pub fn Matrix(comptime N: u32) type {
             return .MatrixF32;
         }
 
-        pub fn zero() Self {
+        pub fn identity() Self {
             var result: Self = undefined;
 
             for (0..N) |i| {
                 for (0..N) |j| {
-                    result.data[i][j] = 0;
+                    result.data[i][j] = 0.0;
                 }
+
+                result.data[i][i] = 1.0;
             }
 
             return result;
         }
 
         pub fn scale(data: [N]f32) Self {
-            var result = zero();
+            var result = identity();
 
             for (0..N) |i| {
                 result.data[i][i] = data[i];
@@ -261,17 +263,32 @@ pub fn Matrix(comptime N: u32) type {
         }
 
         pub fn translate(data: [N - 1]f32) Self {
-            var result = zero();
+            var result = identity();
 
             for (0..N - 1) |i| {
                 result.data[N - 1][i] = data[i];
-
-                result.data[i][i] = 1.0;
             }
 
-            result.data[N - 1][N - 1] = 1.0;
-
             return result;
+        }
+
+        pub fn ortographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
+            if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
+
+            return .{
+                // .data = .{
+                //     [N]f32 { 2.0 / (right - left), 0.0                 , 0.0                 , (right + left) / (left - right) },
+                //     [N]f32 { 0.0                 , 2.0 / (top - bottom), 0.0                 , (top + bottom) / (bottom - top) },
+                //     [N]f32 { 0.0                 , 0.0                 , - 2.0 / (far - near), (far + near) / (near - far)     },
+                //     [N]f32 { 0.0                 , 0.0                 , 0.0                 , 1.0                             },
+                // }
+                .data = .{
+                    [N]f32 { 2.0 / (right - left), 0.0                 , 0.0                 , 0.0 },
+                    [N]f32 { 0.0                 , 2.0 / (top - bottom), 0.0                 , 0.0 },
+                    [N]f32 { 0.0                 , 0.0                 , - 2.0 / (far - near), 0.0     },
+                    [N]f32 { 0.0                 , 0.0                 , 0.0                 , 1.0                             },
+                }
+            };
         }
 
         pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) Self {
@@ -406,3 +423,10 @@ pub fn Matrix(comptime N: u32) type {
 //     }
 // };
 
+// 1 2 3 4
+// 1 2 3 5
+// 1 5 3 7
+// 1 0 9 5
+
+// v -> velocity -> dv/dt
+// u -> velocity -> du/dt

@@ -33,15 +33,17 @@ pub fn main() !void {
     const smileTexture = try shader.newTexture("textureSampler2", "assets/awesomeface.png");
     defer smileTexture.deinit();
 
-    const transformUniform = try shader.newUniform("myTransformMatrix", .MatrixF32, 4);
+    const modelMatrix = try shader.newUniform("modelMatrix", .MatrixF32, 4);
+    const viewMatrix = try shader.newUniform("viewMatrix", .MatrixF32, 4);
+    const projectionMatrix = try shader.newUniform("projectionMatrix", .MatrixF32, 4);
 
     const rectangle = try shader.newMesh(
         VertexData,
         &.{
-            .{ .position = Vec(3).init(.{ 0.5, 0.5, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
-            .{ .position = Vec(3).init(.{ 0.5, -0.5, 0.0 }), .color = Vec(3).init(.{ 0.0, 1.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 1.0 }) },
-            .{ .position = Vec(3).init(.{ -0.5, -0.5, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
-            .{ .position = Vec(3).init(.{ -0.5, 0.5, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 0.0 }) },
+            .{ .position = Vec(3).init(.{ 1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
+            .{ .position = Vec(3).init(.{ 1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 1.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 1.0 }) },
+            .{ .position = Vec(3).init(.{ -1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
+            .{ .position = Vec(3).init(.{ -1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 0.0 }) },
         },
         &.{
             0, 1, 3,
@@ -53,22 +55,14 @@ pub fn main() !void {
     try rectangle.addTexture(texture);
     try rectangle.addTexture(smileTexture);
 
-    shader.start();
-
-    transformUniform.update(Matrix(4).rotate(math.rad(90), Vec(3).init(.{0.0, 0.0, 0.1})));
-
-    rectangle.configure();
-
-    shader.end();
+    modelMatrix.pushData(Matrix(4).scale(.{400.0, 400.0, 1.0, 1.0}));
+    viewMatrix.pushData(Matrix(4).translate(.{0.0, 0.0, -1.0}));
+    projectionMatrix.pushData(Matrix(4).ortographic(0.0, 1280.0, 0.0, 720.0, 0.2, 10.0));
 
     while (window.isRunning()) {
         window.clear();
 
-        shader.start();
-
-        rectangle.draw();
-
-        shader.end();
+        shader.draw(&.{rectangle});
 
         try window.update();
     }

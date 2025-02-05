@@ -1,30 +1,37 @@
 const std = @import("std");
 const gl = @import("zgl");
 const texture = @import("texture.zig");
+const math = @import("../math.zig");
 
 const Allocator = std.mem.Allocator;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
+const ArrayList = std.ArrayList;
 
 const Mesh = @import("mesh.zig").Mesh;
 
+const Texture = texture.Texture;
 pub const TextureInfo = texture.Texture.Info;
 
-const Texture = texture.Texture;
-
-const GroupType = @import("../math.zig").GroupType;
+const GroupType = math.GroupType;
 
 pub const Uniform = struct {
+    program: *Program,
     loc: u32,
-    groupType: GroupType,
     size: u32,
+    groupType: GroupType,
+    isUpdated: bool,
 
-    pub fn init(self: *Uniform, loc: u32, groupType: GroupType, size: u32) void {
+    data: [16]f32,
+
+    pub fn init(self: *Uniform, program: *Program, loc: u32, groupType: GroupType, size: u32) void {
+        self.program = program;
         self.loc = loc;
         self.groupType = groupType;
         self.size = size;
+        self.isUpdated = true;
     }
 
-    pub fn update(self: *Uniform, data: anytype) void {
+    pub fn pushData(self: *Uniform, data: anytype) void {
         const T = @TypeOf(data);
         const dataType = T.groupType();
         const dataSize = T.size();
@@ -37,18 +44,31 @@ pub const Uniform = struct {
             std.log.err("Data type differ to the instanciated uniform", .{});
         }
 
-        switch (dataType) {
+        const selfData: *@TypeOf(data) = @ptrCast(@alignCast(&self.data));
+        selfData.* = data;
+
+        self.configure();
+    }
+
+    fn configure(self: *Uniform) void {
+        if (!self.isUpdated) return;
+
+        self.isUpdated = false;
+        self.program.uniformUpdates.append(self) catch @panic("Increase total memory?");
+    }
+
+    pub fn update(self: *Uniform) void {
+        switch (self.groupType) {
             .MatrixF32 => {
-                switch (dataSize) {
-                    4 => gl.uniformMatrix4fv(self.loc, false, &.{data.value()}),
+                switch (self.size) {
+                    4 => gl.uniformMatrix4fv(self.loc, false, &.{@bitCast(self.data)}),
                     else => unreachable,
                 }
             },
             .VecF32 => {
-                const v: [*]const f32 = @ptrCast(@alignCast(&data.value()));
+                const v: [*]const f32 = @ptrCast(@alignCast(&self.data));
 
-                switch (dataSize) {
-
+                switch (self.size) {
                     1 => gl.uniform1f(self.loc, v[0]),
                     2 => gl.uniform2f(self.loc, v[0], v[1]),
                     3 => gl.uniform3f(self.loc, v[0], v[1], v[2]),
@@ -57,11 +77,16 @@ pub const Uniform = struct {
                 }
             },
         }
+
+        self.isUpdated = true;
     }
 };
 
 pub const Program = struct {
     handle: gl.Program,
+
+    uniformUpdates: ArrayList(*Uniform),
+    meshUpdates: ArrayList(*Mesh),
 
     allocator: FixedBufferAllocator,
 
@@ -76,6 +101,9 @@ pub const Program = struct {
 
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 2 * 1024));
         const fixedAllocator = self.allocator.allocator();
+
+        self.uniformUpdates = try ArrayList(*Uniform).initCapacity(fixedAllocator, 10);
+        self.meshUpdates = try ArrayList(*Mesh).initCapacity(fixedAllocator, 10);
 
         const vertex = try shader(.vertex, vertexPath, fixedAllocator);
         defer vertex.delete();
@@ -92,11 +120,23 @@ pub const Program = struct {
         return self;
     }
 
-    pub fn start(self: *Program) void {
+    pub fn draw(self: *Program, meshs: []const *Mesh) void {
         gl.useProgram(self.handle);
-    }
 
-    pub fn end(_: *Program) void {
+        const uniformLen = self.uniformUpdates.items.len;
+        for (0..uniformLen) |_| {
+            self.uniformUpdates.pop().update();
+        }
+
+        const meshLen = self.meshUpdates.items.len;
+        for (0..meshLen) |_| {
+            self.meshUpdates.pop().update();
+        }
+
+        for (meshs) |mesh| {
+            mesh.draw();
+        }
+
         gl.useProgram(gl.Program.invalid);
     }
 
@@ -122,7 +162,7 @@ pub const Program = struct {
         const alloc = self.allocator.allocator();
 
         const mesh = try alloc.create(Mesh);
-        try mesh.init(T, vertices, indices, alloc);
+        try mesh.init(T, self, vertices, indices, alloc);
 
         return mesh;
     }
@@ -137,7 +177,7 @@ pub const Program = struct {
 
         const uniform = try self.allocator.allocator().create(Uniform);
 
-        uniform.init(loc, groupType, size);
+        uniform.init(self, loc, groupType, size);
 
         return uniform;
     }
