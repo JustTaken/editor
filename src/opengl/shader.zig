@@ -128,10 +128,10 @@ pub const Program = struct {
             self.uniformUpdates.pop().update();
         }
 
-        const meshLen = self.meshUpdates.items.len;
-        for (0..meshLen) |_| {
-            self.meshUpdates.pop().update();
-        }
+        // const meshLen = self.meshUpdates.items.len;
+        // for (0..meshLen) |_| {
+        //     self.meshUpdates.pop().update();
+        // }
 
         for (meshs) |mesh| {
             mesh.draw();

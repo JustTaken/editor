@@ -40,10 +40,10 @@ pub fn main() !void {
     const rectangle = try shader.newMesh(
         VertexData,
         &.{
-            .{ .position = Vec(3).init(.{ 1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
             .{ .position = Vec(3).init(.{ 1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 1.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 1.0 }) },
-            .{ .position = Vec(3).init(.{ -1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
+            .{ .position = Vec(3).init(.{ 1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
             .{ .position = Vec(3).init(.{ -1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 0.0 }) },
+            .{ .position = Vec(3).init(.{ -1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
         },
         &.{
             0, 1, 3,
@@ -58,6 +58,8 @@ pub fn main() !void {
     modelMatrix.pushData(Matrix(4).scale(.{400.0, 400.0, 1.0, 1.0}));
     viewMatrix.pushData(Matrix(4).translate(.{0.0, 0.0, -1.0}));
     projectionMatrix.pushData(Matrix(4).ortographic(0.0, 1280.0, 0.0, 720.0, 0.2, 10.0));
+
+    _ = try rectangle.addInstance();
 
     while (window.isRunning()) {
         window.clear();

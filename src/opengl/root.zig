@@ -125,6 +125,8 @@ pub const OpenGL = struct {
 
         gl.enable(.debug_output);
         gl.enable(.debug_output_synchronous);
+        gl.enable(.cull_face);
+        gl.enable(.depth_test);
         gl.debugMessageCallback({}, errorCallback);
 
         self.allocator = FixedAllocator.init(try allocator.alloc(u8, 4096));
