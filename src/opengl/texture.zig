@@ -55,7 +55,7 @@ pub const Texture = struct {
         gl.textureImage2D(.@"2d", 0, .rgb, self.width, self.height, inputMode, .unsigned_byte, self.data);
         gl.generateMipmap(.@"2d");
 
-        gl.bindTexture(self.handle, .@"2d");
+        gl.bindTexture(gl.Texture.invalid, .@"2d");
     }
 
     pub fn deinit(self: *const Texture) void {

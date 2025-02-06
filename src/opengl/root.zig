@@ -97,8 +97,8 @@ pub const OpenGL = struct {
         }
 
         const contextAttributes = [_]egl.EGLint{
-            egl.EGL_CONTEXT_MAJOR_VERSION,       3,
-            egl.EGL_CONTEXT_MINOR_VERSION,       3,
+            egl.EGL_CONTEXT_MAJOR_VERSION,       4,
+            egl.EGL_CONTEXT_MINOR_VERSION,       6,
             egl.EGL_CONTEXT_OPENGL_PROFILE_MASK, egl.EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
             egl.EGL_NONE,
         };
@@ -142,13 +142,9 @@ pub const OpenGL = struct {
     pub fn addShader(self: *OpenGL, vertex: []const u8, fragment: []const u8) error{ Read, Compile, OutOfMemory }!*Program{
         const program = try self.allocator.allocator().create(Program);
 
-        program.* = try Program.new(vertex, fragment, self.allocator.allocator());
+        try program.init(vertex, fragment, self.allocator.allocator());
 
         return program;
-    }
-
-    pub fn clear(_: *OpenGL) void {
-        gl.clear(.{ .color = true });
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
@@ -160,11 +156,11 @@ pub const OpenGL = struct {
                 else => return error.SwapBuffers,
             }
         }
+
+        gl.clear(.{ .color = true, .depth = true });
     }
 
-    pub fn resize(ptr: *anyopaque, width: i32, height: i32) void {
-        const self: *OpenGL = @ptrCast(@alignCast(ptr));
-
+    pub fn resize(self: *OpenGL, width: i32, height: i32) void {
         if (width == 0 or height == 0) return;
         if (width == self.width and height == self.height) return;
 

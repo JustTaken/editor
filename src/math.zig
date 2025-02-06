@@ -162,6 +162,10 @@ pub fn Matrix(comptime N: u32) type {
             return .MatrixF32;
         }
 
+        pub fn inner() type {
+            return f32;
+        }
+
         pub fn identity() Self {
             var result: Self = undefined;
 
@@ -266,7 +270,7 @@ pub fn Matrix(comptime N: u32) type {
             var result = identity();
 
             for (0..N - 1) |i| {
-                result.data[N - 1][i] = data[i];
+                result.data[i][N - 1] = data[i];
             }
 
             return result;
@@ -305,6 +309,14 @@ pub fn Matrix(comptime N: u32) type {
                     [N]f32 { 0.0, 0.0, -r * near, 0.0},
                 }
             };
+        }
+
+        pub fn add(self: *Self, other: Self) void {
+            for (0..N) |i| {
+                for (0..N) |j| {
+                    self.data[i][j] = self.data[i][j] + other.data[i][j];
+                }
+            }
         }
 
         pub fn mult(m1: Self, m2: Self) Self {

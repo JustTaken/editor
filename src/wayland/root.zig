@@ -3,9 +3,10 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 
-const Input = @import("../input.zig").Xkbcommon;
+const Window = @import("../window.zig").Window;
 
 pub const Wayland = struct {
+    window: *Window,
     display: *wl.Display,
     registry: *wl.Registry,
     seat: *wl.Seat,
@@ -16,14 +17,9 @@ pub const Wayland = struct {
     toplevel: *xdg.Toplevel,
     keyboard: *wl.Keyboard,
 
-    input: Input,
+    pub fn init(self: *Wayland, window: *Window) !void {
+        self.window = window;
 
-    resizeCallbackFn: *const fn (*anyopaque, i32, i32) void,
-    resizeCallbackListener: *anyopaque,
-
-    running: bool,
-
-    pub fn init(self: *Wayland) !void {
         self.display = try wl.Display.connect(null);
         self.registry = try self.display.getRegistry();
 
@@ -110,18 +106,18 @@ fn wmSurfaceListener(wmSurface: *xdg.Surface, event: xdg.Surface.Event, _: *Wayl
 
 fn toplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, data: *Wayland) void {
     switch (event) {
-        .close => data.running = false,
+        .close => data.window.running = false,
         .wm_capabilities => |c| _ = c,
         .configure_bounds => |c| _ = c,
-        .configure => |c| data.resizeCallbackFn(data.resizeCallbackListener, c.width, c.height),
+        .configure => |c| data.window.renderer.resize(c.width, c.height),
     }
 }
 
 fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, data: *Wayland) void {
     switch (event) {
-        .key => |k| data.input.handle(k.key, k.state),
-        .modifiers => |m| data.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
-        .repeat_info => |i| data.input.repeatInfo(i.rate, i.delay),
+        .key => |k| data.window.input.handle(k.key, k.state),
+        .modifiers => |m| data.window.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
+        .repeat_info => |i| data.window.input.repeatInfo(i.rate, i.delay),
         .enter => |_| {},
         .leave => |_| {},
         .keymap => |k| {
@@ -130,7 +126,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, data: *Wayland) v
             const file = std.posix.mmap(null, k.size, std.posix.PROT.READ, .{ .TYPE = .PRIVATE }, k.fd, 0) catch @panic("Failed to open file");
             defer std.posix.munmap(file);
 
-            data.input.init(@ptrCast(file), k.format) catch @panic("Failed to initialize keymap");
+            data.window.input.init(@ptrCast(file), k.format) catch @panic("Failed to initialize keymap");
         },
     }
 }

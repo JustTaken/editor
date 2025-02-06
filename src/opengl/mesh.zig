@@ -7,18 +7,10 @@ const ArrayList = std.ArrayList;
 
 const Program = @import("shader.zig").Program;
 const Texture = @import("texture.zig").Texture;
-const Vec = @import("../math.zig").Vec;
+const Matrix = @import("../math.zig").Matrix;
 
 const Instance = struct {
-    position: Vec(3),
-};
-
-const VertexInfo = struct {
-    size: u32,
-    typ: gl.Type,
-    stride: u32,
-    offset: u32,
-    divisor: u32,
+    transform: Matrix(4),
 };
 
 pub const Mesh = struct {
@@ -29,14 +21,11 @@ pub const Mesh = struct {
     index: gl.Buffer,
     instance: gl.Buffer,
 
-    vertexInfos: []VertexInfo,
-
     newTextures: ArrayList(*Texture),
     textures: ArrayList(*Texture),
     instances: ArrayList(Instance),
 
     size: u32,
-    // isUpdated: bool,
 
     allocator: FixedBufferAllocator,
 
@@ -46,18 +35,17 @@ pub const Mesh = struct {
         program: *Program,
         vertices: []const T,
         indices: []const u32,
+        maxInstances: u32,
         allocator: Allocator,
     ) error{OutOfMemory}!void {
         const fields = @typeInfo(T).Struct.fields;
 
-        // self.isUpdated = true;
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 1024));
         const fixedAllocator = self.allocator.allocator();
 
-        self.vertexInfos = try fixedAllocator.alloc(VertexInfo, fields.len);
         self.newTextures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
         self.textures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
-        self.instances = try ArrayList(Instance).initCapacity(fixedAllocator, 2);
+        self.instances = try ArrayList(Instance).initCapacity(fixedAllocator, maxInstances);
 
         self.program = program;
         self.array = gl.genVertexArray();
@@ -72,14 +60,6 @@ pub const Mesh = struct {
         gl.bufferData(.array_buffer, T, vertices, .static_draw);
 
         inline for (fields, 0..) |field, i| {
-            self.vertexInfos[i] = .{
-                .size = field.type.size(),
-                .typ = getGlType(field.type.inner()),
-                .stride = @sizeOf(T),
-                .offset = @offsetOf(T, field.name),
-                .divisor = 0,
-            };
-
             gl.enableVertexAttribArray(@intCast(i));
             gl.vertexAttribDivisor(@intCast(i), 0);
             gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(T), @offsetOf(T, field.name));
@@ -87,29 +67,20 @@ pub const Mesh = struct {
 
         gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
 
-        self.index = buffers[1];
+        self.instance = buffers[1];
+        gl.bindBuffer(self.instance, .shader_storage_buffer);
+        gl.bufferData(.shader_storage_buffer, Instance, self.instances.unusedCapacitySlice(), .dynamic_draw);
+        gl.bindBufferBase(.shader_storage_buffer, 0, self.instance);
+
+        // gl.bindBuffer(gl.Buffer.invalid, .sha);
+
+        self.index = buffers[2];
         gl.bindBuffer(self.index, .element_array_buffer);
         gl.bufferData(.element_array_buffer, u32, indices, .static_draw);
-        // gl.bindBuffer(gl.Buffer.invalid, .element_array_buffer);
-
-        self.instance = buffers[2];
-        self.instance.bind(.array_buffer);
-        self.instance.data(Instance, self.instances.unusedCapacitySlice(), .dynamic_draw);
-
-        const instanceLayoutOffset = fields.len;
-        inline for (@typeInfo(Instance).Struct.fields, 0..) |field, i| {
-            gl.enableVertexAttribArray(@intCast(instanceLayoutOffset + i));
-            gl.vertexAttribDivisor(@intCast(instanceLayoutOffset + i), 1);
-            gl.vertexAttribPointer(@intCast(instanceLayoutOffset + i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(field.type), @offsetOf(Instance, field.name));
-        }
-
-        gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
 
         gl.bindVertexArray(gl.VertexArray.invalid);
 
         self.size = @intCast(indices.len);
-
-        // self.configure();
     }
 
     fn getGlType(comptime T: type) gl.Type {
@@ -130,73 +101,38 @@ pub const Mesh = struct {
         };
     }
 
-    // fn configure(self: *Mesh) void {
-    //     if (!self.isUpdated) return;
-
-    //     self.isUpdated = false;
-    //     self.program.meshUpdates.append(self) catch @panic("Buy ram lol");
-    // }
-
     pub fn addInstance(self: *Mesh) error{OutOfMemory}!u32 {
         const capacity = self.instances.capacity;
         const len = self.instances.items.len;
 
-        try self.instances.append(.{
-            .position = Vec(3).init(.{0.0, 0.0, 0.0}),
+        if (len >= capacity) return error.OutOfMemory;
+
+        self.instances.appendAssumeCapacity(.{
+            .transform = Matrix(4).translate(.{0.5, 0.0, 0.0}),
         });
 
-        gl.bindBuffer(self.instance, .array_buffer);
+        gl.bindBuffer(self.instance, .shader_storage_buffer);
 
-        if (self.instances.capacity > capacity) {
-             self.instance.data(Instance, self.instances.unusedCapacitySlice(), .dynamic_draw);
-        } else {
-            self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len..]);
-        }
+        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len..len + 1]);
 
-        gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
+        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
 
         return @intCast(len);
     }
 
-    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
-        // gl.bindVertexArray(self.array);
+    pub fn updateInstance(self: *Mesh, index: u32, data: Matrix(4)) void {
+        self.instances.items[index].transform = data;
 
-        // gl.activeTexture(@enumFromInt(self.textures.items.len + @intFromEnum(gl.TextureUnit.texture_0)));
-        // gl.bindTexture(texture.handle, .@"2d");
+        gl.bindBuffer(self.instance, .shader_storage_buffer);
 
-        // try self.textures.append(texture);
-        try self.newTextures.append(texture);
+        self.instance.subData(index * @sizeOf(Instance), Instance, self.instances.items[index..index + 1]);
 
-        // gl.bindVertexArray(gl.VertexArray.invalid);
-
-        // self.configure();
+        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
     }
 
-    // pub fn update(self: *Mesh) void {
-    //     gl.bindVertexArray(self.array);
-
-        // gl.bindBuffer(self.index, .element_array_buffer);
-        // gl.bindBuffer(self.vertex, .array_buffer);
-        // gl.bindBuffer(self.vertex, .array_buffer);
-
-        // for (self.vertexInfos, 0..) |info, i| {
-        //     gl.enableVertexAttribArray(@intCast(i));
-        //     gl.vertexAttribDivisor(@intCast(i), 0);
-        //     gl.vertexAttribPointer(@intCast(i), info.size, info.typ, false, info.stride, info.offset);
-        // }
-
-        // gl.bindBuffer(self.instance, .array_buffer);
-
-        // const instanceLayoutOffset = self.vertexInfos.len;
-        // inline for (@typeInfo(Instance).Struct.fields, 0..) |field, i| {
-        //     gl.vertexAttribPointer(@intCast(instanceLayoutOffset + i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(field.type), @offsetOf(Instance, field.name));
-        //     gl.enableVertexAttribArray(@intCast(instanceLayoutOffset + i));
-        //     gl.vertexAttribDivisor(@intCast(instanceLayoutOffset + i), 1);
-        // }
-
-        // gl.bindVertexArray(gl.VertexArray.invalid);
-    //     self.isUpdated = true;
-    // }
+    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
+        try self.newTextures.append(texture);
+    }
 
     pub fn draw(self: *Mesh) void {
         gl.bindVertexArray(self.array);
@@ -213,7 +149,6 @@ pub const Mesh = struct {
             self.textures.append(texture) catch @panic("TODO");
         }
 
-        // gl.drawElements(.triangles, self.size, .unsigned_int, 0);
         gl.drawElementsInstanced(.triangles, self.size, .unsigned_int, 0, self.instances.items.len);
 
         gl.bindVertexArray(gl.VertexArray.invalid);

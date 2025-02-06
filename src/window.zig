@@ -2,6 +2,10 @@ const std = @import("std");
 
 const renderer = @import("opengl/root.zig");
 const display = @import("wayland/root.zig");
+const input = @import("input.zig");
+
+const Input = input.Xkbcommon;
+const Key = input.Key;
 
 const Allocator = std.mem.Allocator;
 
@@ -12,38 +16,35 @@ pub const Window = struct {
     display: Display,
     renderer: Renderer,
 
+    input: Input,
+
+    running: bool,
+
     pub fn init(
         self: *Window,
         width: u32,
         height: u32,
         allocator: Allocator,
     ) !void {
-        self.display.resizeCallbackFn = Renderer.resize;
-        self.display.resizeCallbackListener = &self.renderer;
-
-        try self.display.init();
+        try self.display.init(self);
 
         try self.renderer.init(
             width,
             height,
-            self.display.getHandle(),
-            self.display.getSurface(),
+            self.display.display,
+            self.display.surface,
             allocator,
         );
 
-        self.display.running = true;
+        self.running = true;
     }
 
     pub fn newShader(self: *Window, vertex: []const u8, fragment: []const u8) error{ Read, Compile, NotFound, OutOfMemory }!*renderer.Program {
         return try self.renderer.addShader(vertex, fragment);
     }
 
-    pub fn clear(self: *Window) void {
-        self.renderer.clear();
-    }
-
-    pub fn isRunning(self: *const Window) bool {
-        return self.display.running;
+    pub fn isKeyPressed(self: *const Window, key: Key) bool {
+        return self.input.keys.contains(key);
     }
 
     pub fn update(self: *Window) !void {

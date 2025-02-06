@@ -53,7 +53,7 @@ pub const Xkbcommon = struct {
     }
 };
 
-const Key = enum(u32) {
+pub const Key = enum(u32) {
     Space = 32,
     Comma = 44,
     Minus = 45,
