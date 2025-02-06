@@ -21,8 +21,6 @@ pub const Mesh = struct {
     index: gl.Buffer,
     instance: gl.Buffer,
 
-    newTextures: ArrayList(*Texture),
-    textures: ArrayList(*Texture),
     instances: ArrayList(Instance),
 
     size: u32,
@@ -43,8 +41,6 @@ pub const Mesh = struct {
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 1024));
         const fixedAllocator = self.allocator.allocator();
 
-        self.newTextures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
-        self.textures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
         self.instances = try ArrayList(Instance).initCapacity(fixedAllocator, maxInstances);
 
         self.program = program;
@@ -71,8 +67,6 @@ pub const Mesh = struct {
         gl.bindBuffer(self.instance, .shader_storage_buffer);
         gl.bufferData(.shader_storage_buffer, Instance, self.instances.unusedCapacitySlice(), .dynamic_draw);
         gl.bindBufferBase(.shader_storage_buffer, 0, self.instance);
-
-        // gl.bindBuffer(gl.Buffer.invalid, .sha);
 
         self.index = buffers[2];
         gl.bindBuffer(self.index, .element_array_buffer);
@@ -101,53 +95,40 @@ pub const Mesh = struct {
         };
     }
 
-    pub fn addInstance(self: *Mesh) error{OutOfMemory}!u32 {
+    pub fn addInstances(self: *Mesh, count: u32) error{OutOfMemory}![]Instance {
         const capacity = self.instances.capacity;
         const len = self.instances.items.len;
 
-        if (len >= capacity) return error.OutOfMemory;
+        if (len + count > capacity) return error.OutOfMemory;
 
-        self.instances.appendAssumeCapacity(.{
-            .transform = Matrix(4).translate(.{0.5, 0.0, 0.0}),
-        });
+        const instances = self.instances.addManyAtAssumeCapacity(len, count);
 
-        gl.bindBuffer(self.instance, .shader_storage_buffer);
-
-        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len..len + 1]);
-
-        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
-
-        return @intCast(len);
-    }
-
-    pub fn updateInstance(self: *Mesh, index: u32, data: Matrix(4)) void {
-        self.instances.items[index].transform = data;
+        for (instances) |*instance| {
+            instance.transform = Matrix(4).identity();
+        }
 
         gl.bindBuffer(self.instance, .shader_storage_buffer);
 
-        self.instance.subData(index * @sizeOf(Instance), Instance, self.instances.items[index..index + 1]);
+        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len..len + count]);
 
         gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
+
+        return instances;
     }
 
-    pub fn addTexture(self: *Mesh, texture: *Texture) error{OutOfMemory}!void {
-        try self.newTextures.append(texture);
+    pub fn updateInstances(self: *Mesh, instances: []Instance) void {
+        const ptr = @intFromPtr(instances.ptr);
+        const index = ptr / @sizeOf(Instance);
+
+        gl.bindBuffer(self.instance, .shader_storage_buffer);
+
+        self.instance.subData(index * @sizeOf(Instance), Instance, instances);
+
+        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
     }
 
     pub fn draw(self: *Mesh) void {
         gl.bindVertexArray(self.array);
-
-        const newTextures = self.newTextures.items.len;
-        for (0..newTextures) |_| {
-            const texture = self.newTextures.pop();
-            const index = self.textures.items.len;
-
-            gl.activeTexture(@enumFromInt(index + @intFromEnum(gl.TextureUnit.texture_0)));
-            gl.bindTexture(texture.handle, .@"2d");
-            gl.uniform1i(texture.loc, @intCast(index));
-
-            self.textures.append(texture) catch @panic("TODO");
-        }
 
         gl.drawElementsInstanced(.triangles, self.size, .unsigned_int, 0, self.instances.items.len);
 
@@ -160,3 +141,92 @@ pub const Mesh = struct {
         self.array.delete();
     }
 };
+
+const Face = struct {
+    vertice: [3]u32,
+    normal: [3]u32,
+    texture: [3]u32,
+};
+const ObjFormat = struct {
+    vertices: ArrayList([3]f32),
+    normals: ArrayList([3]f32),
+    textureCoords: ArrayList([3]f32),
+    faces: ArrayList(Face),
+
+    fn init(self: *ObjFormat, path: []const u8, allocator: Allocator) error{OutOfMemory, Read}!void {
+        const buffer = try allocator.alloc(u8, 1024);
+        defer allocator.free(buffer);
+
+        const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
+
+        var offset: usize = 0;
+        while (until(source[offset..], '\n')) |line| : (offset += line.len) {
+            if (std.mem.startsWith(u8, line, "v ")) break;
+        } else return error.Read;
+
+        self.vertices = try ArrayList([3]f32).initCapacity(allocator, 10);
+        errdefer self.vertices.deinit();
+
+        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+            if (!std.mem.startsWith(u8, line, "v ")) break;
+            std.debug.print("vertices: {s}", .{line});
+        } else return error.Read;
+
+        self.normals = try ArrayList([3]f32).initCapacity(allocator, 10);
+        errdefer self.normals.deinit();
+
+        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+            if (!std.mem.startsWith(u8, line, "vn ")) break;
+            std.debug.print("normals: {s}", .{line});
+        } else return error.Read;
+
+        self.textureCoords = try ArrayList([3]f32).initCapacity(allocator, 10);
+        errdefer self.textureCoords.deinit();
+
+        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+            if (!std.mem.startsWith(u8, line, "vt ")) break;
+            std.debug.print("textures: {s}", .{line});
+        } else return error.Read;
+
+        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+            if (std.mem.startsWith(u8, line, "f ")) break;
+        } else return error.Read;
+
+        self.faces = try ArrayList(Face).initCapacity(allocator, 10);
+        errdefer self.faces.deinit();
+
+        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+            if (!std.mem.startsWith(u8, line, "f ")) break;
+            std.debug.print("faces: {s}", .{line});
+        }
+    }
+
+    fn until(buffer: []u8, char: u8) ?[]u8 {
+        if (buffer.len == 0) return null;
+
+        var i: u32 = 0;
+
+        while (buffer[i] != char) {
+            i += 1;
+
+            if (i >= buffer.len) {
+                return null;
+            }
+        }
+
+        return buffer[0..i + 1];
+    }
+
+    fn deinit(self: *ObjFormat) void {
+        self.faces.deinit();
+        self.textureCoords.deinit();
+        self.normals.deinit();
+        self.vertices.deinit();
+    }
+};
+
+test "Reading file" {
+    var obj: ObjFormat = undefined;
+    try obj.init("assets/cube.obj", std.testing.allocator);
+    defer obj.deinit();
+}

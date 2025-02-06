@@ -19,7 +19,7 @@ pub fn Vec(comptime N: u32) type {
         const Self = @This();
 
         pub fn init(data: [N]f32) Self {
-            return Self {
+            return Self{
                 .data = data,
             };
         }
@@ -79,13 +79,11 @@ pub fn Vec(comptime N: u32) type {
         pub fn cross(self: Self, other: Self) Self {
             if (N != 3) @compileError("Cannot call cross product on non 3d vectors");
 
-            return .{
-                .data = .{
-                    self.data[1] * other.data[2] - self.data[2] * other.data[1],
-                    self.data[2] * other.data[0] - self.data[0] * other.data[2],
-                    self.data[0] * other.data[1] - self.data[1] * other.data[0],
-                }
-            };
+            return .{ .data = .{
+                self.data[1] * other.data[2] - self.data[2] * other.data[1],
+                self.data[2] * other.data[0] - self.data[0] * other.data[2],
+                self.data[0] * other.data[1] - self.data[1] * other.data[0],
+            } };
         }
 
         pub fn len(self: Self) f32 {
@@ -180,154 +178,136 @@ pub fn Matrix(comptime N: u32) type {
             return result;
         }
 
-        pub fn scale(data: [N]f32) Self {
-            var result = identity();
+        pub fn scale(self: Self, data: [N]f32) Self {
+            var result = self;
 
             for (0..N) |i| {
-                result.data[i][i] = data[i];
+                result.data[i][i] = self.data[i][i] * data[i];
             }
 
             return result;
         }
 
-        pub fn xRotate(theta: f32) Self {
-            if (N != 4) @compileError("TODO: create rotation matrix for dimension other than 4");
+        // pub fn xRotate(self: *Self, theta: f32) void {
+        //     if (N != 4) @compileError("TODO: create rotation matrix for dimension other than 4");
 
-            var cos = std.math.cos(theta);
-            var sin = std.math.sin(theta);
+        //     var cos = std.math.cos(theta);
+        //     var sin = std.math.sin(theta);
 
-            if (cos * cos < 0.01) {
-                cos = 0;
-            }
-            if (sin * sin < 0.01) {
-                sin = 0;
-            }
+        //     if (cos * cos < 0.01) {
+        //         cos = 0;
+        //     }
+        //     if (sin * sin < 0.01) {
+        //         sin = 0;
+        //     }
 
-            return .{
-                .data = .{
-                    [N]f32 { 1.0, 0.0, 0.0, 0.0 },
-                    [N]f32 { 0.0, cos, sin, 0.0 },
-                    [N]f32 { 0.0, - sin, cos, 0.0 },
-                    [N]f32 { 0.0, 0.0, 0.0, 1.0 },
-                },
-            };
-        }
+        //     self.data[0] = .{ 1.0, 0.0, 0.0, 0.0 };
+        //     self.data[1] = .{ 0.0, cos, sin, 0.0 };
+        //     self.data[2] = .{ 0.0, -sin, cos, 0.0 };
+        //     self.data[3] = .{ 0.0, 0.0, 0.0, 1.0 };
+        // }
 
-        pub fn yRotate(theta: f32) Self {
-            if (N != 4) @compileError("TODO: create rotation matrix for dimension other than 4");
+        // pub fn yRotate(self: *Self, theta: f32) void {
+        //     if (N != 4) @compileError("TODO: create rotation matrix for dimension other than 4");
 
-            var cos = std.math.cos(theta);
-            var sin = std.math.sin(theta);
+        //     var cos = std.math.cos(theta);
+        //     var sin = std.math.sin(theta);
 
-            if (cos * cos < 0.001) {
-                cos = 0;
-            }
-            if (sin * sin < 0.001) {
-                sin = 0;
-            }
+        //     if (cos * cos < 0.001) {
+        //         cos = 0;
+        //     }
+        //     if (sin * sin < 0.001) {
+        //         sin = 0;
+        //     }
 
-            return .{
-                .data = .{
-                    [N]f32 { cos, 0.0, - sin, 0.0 },
-                    [N]f32 { 0.0, 1.0, 0.0, 0.0 },
-                    [N]f32 { sin, 0.0, cos, 0.0 },
-                    [N]f32 { 0.0, 0.0, 0.0, 1.0 },
-                },
-            };
-        }
+        //     self.data[0] = .{ cos, 0.0, -sin, 0.0 };
+        //     self.data[1] = .{ 0.0, 1.0, 0.0, 0.0 };
+        //     self.data[2] = .{ sin, 0.0, cos, 0.0 };
+        //     self.data[3] = .{ 0.0, 0.0, 0.0, 1.0 };
+        // }
 
-        pub fn ortogonal(vec: Vec) Self {
+        pub fn ortogonal(self: *Self, vec: Vec) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
-            return .{
-                .data = .{
-                    [N]f32 {vec.x * vec.x, vec.x * vec.y - vec.z, vec.x * vec.z + vec.y, 0.0},
-                    [N]f32 {vec.y * vec.x + vec.z, vec.y * vec.y, vec.y * vec.z - vec.x, 0.0},
-                    [N]f32 {vec.z * vec.x - vec.y, vec.z * vec.y + vec.x, vec.z * vec.z, 0.0},
-                    [N]f32 {0.0, 0.0, 0.0, 1.0},
-                }
-            };
+            return self.mult(.{ .data = .{
+                .{ vec.x * vec.x, vec.x * vec.y - vec.z, vec.x * vec.z + vec.y, 0.0 },
+                .{ vec.y * vec.x + vec.z, vec.y * vec.y, vec.y * vec.z - vec.x, 0.0 },
+                .{ vec.z * vec.x - vec.y, vec.z * vec.y + vec.x, vec.z * vec.z, 0.0 },
+                .{ 0.0, 0.0, 0.0, 1.0 },
+            } });
         }
 
-        pub fn rotate(radians: f32, vec: Vec(3)) Self {
+        pub fn rotate(self: *Self, radians: f32, vec: Vec(3)) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
             const norm = vec.normalize().data;
             const cos = std.math.cos(radians);
             const sin = std.math.sin(radians);
 
-            return .{
-                .data = .{
-                    [N]f32 {norm[0] * norm[0] * (1 - cos) + cos          , norm[1] * norm[0] * (1 - cos) - norm[2] * sin, norm[2] * norm[0] * (1 - cos) + norm[1] * sin, 0.0},
-                    [N]f32 {norm[0] * norm[1] * (1 - cos) + norm[2] * sin, norm[1] * norm[1] * (1 - cos) + cos          , norm[2] * norm[1] * (1 - cos) - norm[0] * sin, 0.0},
-                    [N]f32 {norm[0] * norm[2] * (1 - cos) - norm[1] * sin, norm[1] * norm[2] * (1 - cos) + norm[0] * sin, norm[2] * norm[2] * (1 - cos) + cos          , 0.0},
-                    [N]f32 {0.0                                          , 0.0                                          , 0.0                                          , 1.0},
-                }
-            };
+            return self.mult(.{ .data = .{
+                .{ norm[0] * norm[0] * (1 - cos) + cos, norm[1] * norm[0] * (1 - cos) - norm[2] * sin, norm[2] * norm[0] * (1 - cos) + norm[1] * sin, 0.0 },
+                .{ norm[0] * norm[1] * (1 - cos) + norm[2] * sin, norm[1] * norm[1] * (1 - cos) + cos, norm[2] * norm[1] * (1 - cos) - norm[0] * sin, 0.0 },
+                .{ norm[0] * norm[2] * (1 - cos) - norm[1] * sin, norm[1] * norm[2] * (1 - cos) + norm[0] * sin, norm[2] * norm[2] * (1 - cos) + cos, 0.0 },
+                .{ 0.0, 0.0, 0.0, 1.0 },
+            } });
         }
 
-        pub fn translate(data: [N - 1]f32) Self {
-            var result = identity();
+        pub fn translate(self: Self, data: [N - 1]f32) Self {
+            var result = self;
 
             for (0..N - 1) |i| {
-                result.data[i][N - 1] = data[i];
+                result.data[i][N - 1] = self.data[i][N - 1] + data[i];
             }
 
             return result;
         }
 
-        pub fn ortographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
+        pub fn ortographic(self: Self, left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
-            return .{
-                // .data = .{
-                //     [N]f32 { 2.0 / (right - left), 0.0                 , 0.0                 , (right + left) / (left - right) },
-                //     [N]f32 { 0.0                 , 2.0 / (top - bottom), 0.0                 , (top + bottom) / (bottom - top) },
-                //     [N]f32 { 0.0                 , 0.0                 , - 2.0 / (far - near), (far + near) / (near - far)     },
-                //     [N]f32 { 0.0                 , 0.0                 , 0.0                 , 1.0                             },
-                // }
-                .data = .{
-                    [N]f32 { 2.0 / (right - left), 0.0                 , 0.0                 , 0.0 },
-                    [N]f32 { 0.0                 , 2.0 / (top - bottom), 0.0                 , 0.0 },
-                    [N]f32 { 0.0                 , 0.0                 , - 2.0 / (far - near), 0.0     },
-                    [N]f32 { 0.0                 , 0.0                 , 0.0                 , 1.0                             },
-                }
-            };
+            return self.mult(.{ .data = .{
+                .{ 2.0 / (right - left), 0.0, 0.0, 0.0 },
+                .{ 0.0, 2.0 / (top - bottom), 0.0, 0.0 },
+                .{ 0.0, 0.0, -2.0 / (far - near), 0.0 },
+                .{ 0.0, 0.0, 0.0, 1.0 },
+            } });
         }
 
-        pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) Self {
+        pub fn perspective(self: *Self, fovy: f32, aspect: f32, near: f32, far: f32) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
             const top = 1.0 / std.math.tan(fovy * 0.5);
             const r = far / (far - near);
 
-            return .{
-                .data = .{
-                    [N]f32 {top / aspect, 0.0, 0.0, 0.0},
-                    [N]f32 { 0.0, top, 0.0, 0.0},
-                    [N]f32 { 0.0, 0.0, r, 1.0},
-                    [N]f32 { 0.0, 0.0, -r * near, 0.0},
-                }
-            };
+            return self.mult(.{ .data = .{
+                .{ top / aspect, 0.0, 0.0, 0.0 },
+                .{ 0.0, top, 0.0, 0.0 },
+                .{ 0.0, 0.0, r, 1.0 },
+                .{ 0.0, 0.0, -r * near, 0.0 },
+            } });
         }
 
-        pub fn add(self: *Self, other: Self) void {
+        pub fn add(self: Self, other: Self) Self {
+            var result = self;
+
             for (0..N) |i| {
                 for (0..N) |j| {
-                    self.data[i][j] = self.data[i][j] + other.data[i][j];
+                    result.data[i][j] = self.data[i][j] + other.data[i][j];
                 }
             }
+
+            return result;
         }
 
-        pub fn mult(m1: Self, m2: Self) Self {
+        pub fn mult(self: Self, other: Self) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
-            return .{
-                [N]f32 {m1[0][0] * m2[0][0] + m1[0][1] * m2[1][0] + m1[0][2] * m2[2][0] + m1[0][3] * m2[3][0], m1[0][0] * m2[0][1] + m1[0][1] * m2[1][1] + m1[0][2] * m2[2][1] + m1[0][3] * m2[3][1], m1[0][0] * m2[0][2] + m1[0][1] * m2[1][2] + m1[0][2] * m2[2][2] + m1[0][3] * m2[3][2], m1[0][0] * m2[0][3] + m1[0][1] * m2[1][3] + m1[0][2] * m2[2][3] + m1[0][3] * m2[3][3]},
-                [N]f32 {m1[1][0] * m2[0][0] + m1[1][1] * m2[1][0] + m1[1][2] * m2[2][0] + m1[1][3] * m2[3][0], m1[1][0] * m2[0][1] + m1[1][1] * m2[1][1] + m1[1][2] * m2[2][1] + m1[1][3] * m2[3][1], m1[1][0] * m2[0][2] + m1[1][1] * m2[1][2] + m1[1][2] * m2[2][2] + m1[1][3] * m2[3][2], m1[1][0] * m2[0][3] + m1[1][1] * m2[1][3] + m1[1][2] * m2[2][3] + m1[1][3] * m2[3][3]},
-                [N]f32 {m1[2][0] * m2[0][0] + m1[2][1] * m2[1][0] + m1[2][2] * m2[2][0] + m1[2][3] * m2[3][0], m1[2][0] * m2[0][1] + m1[2][1] * m2[1][1] + m1[2][2] * m2[2][1] + m1[2][3] * m2[3][1], m1[2][0] * m2[0][2] + m1[2][1] * m2[1][2] + m1[2][2] * m2[2][2] + m1[2][3] * m2[3][2], m1[2][0] * m2[0][3] + m1[2][1] * m2[1][3] + m1[2][2] * m2[2][3] + m1[2][3] * m2[3][3]},
-                [N]f32 {m1[3][0] * m2[0][0] + m1[3][1] * m2[1][0] + m1[3][2] * m2[2][0] + m1[3][3] * m2[3][0], m1[3][0] * m2[0][1] + m1[3][1] * m2[1][1] + m1[3][2] * m2[2][1] + m1[3][3] * m2[3][1], m1[3][0] * m2[0][2] + m1[3][1] * m2[1][2] + m1[3][2] * m2[2][2] + m1[3][3] * m2[3][2], m1[3][0] * m2[0][3] + m1[3][1] * m2[1][3] + m1[3][2] * m2[2][3] + m1[3][3] * m2[3][3]},
-            };
+            return Self{ .data = .{
+                .{ self.data[0][0] * other.data[0][0] + self.data[0][1] * other.data[1][0] + self.data[0][2] * other.data[2][0] + self.data[0][3] * other.data[3][0], self.data[0][0] * other.data[0][1] + self.data[0][1] * other.data[1][1] + self.data[0][2] * other.data[2][1] + self.data[0][3] * other.data[3][1], self.data[0][0] * other.data[0][2] + self.data[0][1] * other.data[1][2] + self.data[0][2] * other.data[2][2] + self.data[0][3] * other.data[3][2], self.data[0][0] * other.data[0][3] + self.data[0][1] * other.data[1][3] + self.data[0][2] * other.data[2][3] + self.data[0][3] * other.data[3][3] },
+                .{ self.data[1][0] * other.data[0][0] + self.data[1][1] * other.data[1][0] + self.data[1][2] * other.data[2][0] + self.data[1][3] * other.data[3][0], self.data[1][0] * other.data[0][1] + self.data[1][1] * other.data[1][1] + self.data[1][2] * other.data[2][1] + self.data[1][3] * other.data[3][1], self.data[1][0] * other.data[0][2] + self.data[1][1] * other.data[1][2] + self.data[1][2] * other.data[2][2] + self.data[1][3] * other.data[3][2], self.data[1][0] * other.data[0][3] + self.data[1][1] * other.data[1][3] + self.data[1][2] * other.data[2][3] + self.data[1][3] * other.data[3][3] },
+                .{ self.data[2][0] * other.data[0][0] + self.data[2][1] * other.data[1][0] + self.data[2][2] * other.data[2][0] + self.data[2][3] * other.data[3][0], self.data[2][0] * other.data[0][1] + self.data[2][1] * other.data[1][1] + self.data[2][2] * other.data[2][1] + self.data[2][3] * other.data[3][1], self.data[2][0] * other.data[0][2] + self.data[2][1] * other.data[1][2] + self.data[2][2] * other.data[2][2] + self.data[2][3] * other.data[3][2], self.data[2][0] * other.data[0][3] + self.data[2][1] * other.data[1][3] + self.data[2][2] * other.data[2][3] + self.data[2][3] * other.data[3][3] },
+                .{ self.data[3][0] * other.data[0][0] + self.data[3][1] * other.data[1][0] + self.data[3][2] * other.data[2][0] + self.data[3][3] * other.data[3][0], self.data[3][0] * other.data[0][1] + self.data[3][1] * other.data[1][1] + self.data[3][2] * other.data[2][1] + self.data[3][3] * other.data[3][1], self.data[3][0] * other.data[0][2] + self.data[3][1] * other.data[1][2] + self.data[3][2] * other.data[2][2] + self.data[3][3] * other.data[3][2], self.data[3][0] * other.data[0][3] + self.data[3][1] * other.data[1][3] + self.data[3][2] * other.data[2][3] + self.data[3][3] * other.data[3][3] },
+            } };
         }
     };
 }

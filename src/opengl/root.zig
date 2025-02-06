@@ -139,7 +139,7 @@ pub const OpenGL = struct {
         gl.clearColor(1.0, 1.0, 0.5, 1.0);
     }
 
-    pub fn addShader(self: *OpenGL, vertex: []const u8, fragment: []const u8) error{ Read, Compile, OutOfMemory }!*Program{
+    pub fn newProgram(self: *OpenGL, vertex: []const u8, fragment: []const u8) error{ Read, Compile, OutOfMemory }!*Program{
         const program = try self.allocator.allocator().create(Program);
 
         try program.init(vertex, fragment, self.allocator.allocator());

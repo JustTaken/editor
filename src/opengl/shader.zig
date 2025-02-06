@@ -9,39 +9,18 @@ const ArrayList = std.ArrayList;
 
 const Mesh = @import("mesh.zig").Mesh;
 const Matrix = @import("../math.zig").Matrix;
+const Uniform = @import("uniform.zig").Uniform;
 
 const Texture = texture.Texture;
 pub const TextureInfo = texture.Texture.Info;
 
 const GroupType = math.GroupType;
 
-pub const Uniform = struct {
-    handle: gl.Buffer,
-    loc: u32,
-
-    pub fn pushData(self: *Uniform, comptime T: type, data: []const T, offset: u32) void {
-        gl.bindBuffer(self.handle, .uniform_buffer);
-        gl.bufferSubData(.uniform_buffer, offset * @sizeOf(T), T, data);
-        gl.bindBuffer(gl.Buffer.invalid, .uniform_buffer);
-    }
-
-    pub fn init(self: *Uniform, comptime T: type, data: []const T, loc: u32) void {
-        self.handle = gl.Buffer.gen();
-        self.loc = loc;
-
-        gl.bindBuffer(self.handle, .uniform_buffer);
-        gl.bufferData(.uniform_buffer, T, data, .dynamic_draw);
-        gl.bindBufferBase(.uniform_buffer, self.loc, self.handle);
-        gl.bindBuffer(gl.Buffer.invalid, .uniform_buffer);
-    }
-
-    pub fn deinit(self: *Uniform) void {
-        self.handle.delete();
-    }
-};
-
 pub const Program = struct {
     handle: gl.Program,
+
+    unboundTextures: ArrayList(*Texture),
+    boundTextures: ArrayList(*Texture),
 
     allocator: FixedBufferAllocator,
 
@@ -55,6 +34,9 @@ pub const Program = struct {
 
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 2 * 1024));
         const fixedAllocator = self.allocator.allocator();
+
+        self.boundTextures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
+        self.unboundTextures = try ArrayList(*Texture).initCapacity(fixedAllocator, 2);
 
         const vertex = try shader(.vertex, vertexPath, fixedAllocator);
         defer vertex.delete();
@@ -72,6 +54,16 @@ pub const Program = struct {
     pub fn draw(self: *Program, meshs: []const *Mesh) void {
         gl.useProgram(self.handle);
 
+        for (0..self.unboundTextures.items.len) |_| {
+            const index: u32 = @intCast(self.boundTextures.items.len);
+            const tex = self.unboundTextures.pop();
+
+            gl.bindTextureUnit(tex.handle, index);
+            gl.uniform1i(tex.loc, @intCast(index));
+
+            self.boundTextures.append(tex) catch @panic("TODO");
+        }
+
         for (meshs) |mesh| {
             mesh.draw();
         }
@@ -88,6 +80,8 @@ pub const Program = struct {
 
         const tex = try self.allocator.allocator().create(Texture);
         tex.init(path, name, loc);
+
+        try self.unboundTextures.append(tex);
 
         return tex;
     }
@@ -111,12 +105,13 @@ pub const Program = struct {
         self: *Program,
         name: [:0]const u8,
         comptime T: type,
-        data: []const T,
-    ) error{ OutOfMemory, NotFound }!*Uniform {
+        comptime N: u32,
+        data: [N]T,
+    ) error{ OutOfMemory, NotFound }!*Uniform(T, N) {
         const loc = self.handle.uniformBlockIndex(name) orelse return error.NotFound;
 
-        const uniform = try self.allocator.allocator().create(Uniform);
-        uniform.init(T, data, loc);
+        const uniform = try self.allocator.allocator().create(Uniform(T, N));
+        uniform.init(data, loc);
 
         return uniform;
     }

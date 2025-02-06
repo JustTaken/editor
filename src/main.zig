@@ -21,21 +21,20 @@ pub fn main() !void {
     var fixedAllocator = std.heap.FixedBufferAllocator.init(buffer);
     var window: Window = undefined;
 
-    try window.init(800, 600, fixedAllocator.allocator());
+    var width: u32 = 800;
+    var height: u32 = 600;
+
+    try window.init(width, height, fixedAllocator.allocator());
     defer window.deinit();
 
-    const shader = try window.newShader("assets/vertex.glsl", "assets/fragment.glsl");
+    const shader = try window.renderer.newProgram("assets/vertex.glsl", "assets/fragment.glsl");
     defer shader.deinit();
 
     const texture = try shader.newTexture("textureSampler1", "assets/container.jpg");
     defer texture.deinit();
 
-    // const smileTexture = try shader.newTexture("textureSampler2", "assets/awesomeface.png");
-    // defer smileTexture.deinit();
-
-    // const modelMatrix = try shader.newUniform("modelMatrix", .MatrixF32, 4);
-    // const viewMatrix = try shader.newUniform("viewMatrix", .MatrixF32, 4);
-    // const projectionMatrix = try shader.newUniform("projectionMatrix", .MatrixF32, 4);
+    const smileTexture = try shader.newTexture("textureSampler2", "assets/awesomeface.png");
+    defer smileTexture.deinit();
 
     const rectangle = try shader.newMesh(
         VertexData,
@@ -54,38 +53,45 @@ pub fn main() !void {
 
     defer rectangle.deinit();
 
-    var matrices = [_]Matrix(4){
-        Matrix(4).scale(.{200.0, 400.0, 1.0, 1.0}),
-        Matrix(4).translate(.{0.0, 0.0, -1.0}),
-        Matrix(4).ortographic(0.0, 1280.0, 0.0, 720.0, 0.2, 10.0),
-    };
+    var identity = Matrix(4).identity();
 
-    var uniform = try shader.newUniformBlock("Matrix", Matrix(4), &matrices);
+    var uniform = try shader.newUniformBlock("Matrix", Matrix(4), 3, .{
+        identity.scale(.{200.0, 400.0, 1.0, 1.0}),
+        identity.translate(.{0.0, 0.0, -1.0}),
+        identity.ortographic(0.0, 1280.0, 0.0, 720.0, 0.2, 10.0),
+    });
     defer uniform.deinit();
-
-    try rectangle.addTexture(texture);
-    // try rectangle.addTexture(smileTexture);
 
     const velocity = 10.0;
 
-    _ = try rectangle.addInstance();
+    const instance = try rectangle.addInstances(1);
+    _ = instance;
 
     while (window.running) {
-        shader.draw(&.{rectangle});
-
-        if (window.isKeyPressed(.ArrowLeft)) {
-            addUniform(uniform, &matrices, velocity, 1, 0, 3);
-        } else if (window.isKeyPressed(.ArrowRight)) {
-            addUniform(uniform, &matrices, -velocity, 1, 0, 3);
+        if (window.input.keys.contains(.ArrowLeft)) {
+            uniform.data[1] = uniform.data[1].translate(.{velocity, 0.0, 0.0});
+            uniform.pushData(1, 1);
+        } else if (window.input.keys.contains(.ArrowRight)) {
+            uniform.data[1] = uniform.data[1].translate(.{-velocity, 0.0, 0.0});
+            uniform.pushData(1, 1);
+        } else if (window.input.keys.contains(.ArrowDown)) {
+            uniform.data[0] = uniform.data[0].rotate(math.rad(-5), Vec(3).init(.{1.0, 0.0, 0.0}));
+            uniform.pushData(0, 1);
+        } else if (window.input.keys.contains(.ArrowUp)) {
+            uniform.data[0] = uniform.data[0].rotate(math.rad(5), Vec(3).init(.{1.0, 0.0, 0.0}));
+            uniform.pushData(0, 1);
         }
+
+        if (window.renderer.width != width or window.renderer.height != height) {
+            width = window.renderer.width;
+            height = window.renderer.height;
+
+            uniform.data[2] = identity.ortographic(0, @floatFromInt(width), 0.0, @floatFromInt(height), 0.2, 10.0);
+            uniform.pushData(2, 1);
+        }
+
+        shader.draw(&.{rectangle});
 
         try window.update();
     }
-}
-
-fn addUniform(uniform: anytype, matrices: []Matrix(4), value: f32, index: u32, row: u32, col: u32) void {
-    const T = Matrix(4);
-    matrices[index].data[row][col] += value;
-    // std.debug.print("offset: {}\n", .{@sizeOf(T) * index + 4 * @sizeOf(Matrix(4).inner()) * row + col * @sizeOf(Matrix(4).inner())});
-    uniform.pushData(T.inner(), &.{matrices[index].data[row][col]}, T.size() * T.size() * index + T.size() * row + col);
 }

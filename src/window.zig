@@ -5,7 +5,6 @@ const display = @import("wayland/root.zig");
 const input = @import("input.zig");
 
 const Input = input.Xkbcommon;
-const Key = input.Key;
 
 const Allocator = std.mem.Allocator;
 
@@ -37,14 +36,6 @@ pub const Window = struct {
         );
 
         self.running = true;
-    }
-
-    pub fn newShader(self: *Window, vertex: []const u8, fragment: []const u8) error{ Read, Compile, NotFound, OutOfMemory }!*renderer.Program {
-        return try self.renderer.addShader(vertex, fragment);
-    }
-
-    pub fn isKeyPressed(self: *const Window, key: Key) bool {
-        return self.input.keys.contains(key);
     }
 
     pub fn update(self: *Window) !void {
