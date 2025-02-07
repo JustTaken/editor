@@ -29,16 +29,21 @@ pub const Mesh = struct {
 
     pub fn init(
         self: *Mesh,
-        comptime T: type,
         program: *Program,
-        vertices: []const T,
-        indices: []const u32,
+        path: []const u8,
         maxInstances: u32,
         allocator: Allocator,
+        // comptime T: type,
+        // program: *Program,
+        // vertices: []const T,
+        // indices: []const u32,
+        // maxInstances: u32,
+        // allocator: Allocator,
     ) error{OutOfMemory}!void {
-        const fields = @typeInfo(T).Struct.fields;
+        // const fields = @typeInfo(T).Struct.fields;
 
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 1024));
+
         const fixedAllocator = self.allocator.allocator();
 
         self.instances = try ArrayList(Instance).initCapacity(fixedAllocator, maxInstances);
@@ -109,7 +114,7 @@ pub const Mesh = struct {
 
         gl.bindBuffer(self.instance, .shader_storage_buffer);
 
-        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len..len + count]);
+        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len .. len + count]);
 
         gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
 
@@ -143,87 +148,200 @@ pub const Mesh = struct {
 };
 
 const Face = struct {
-    vertice: [3]u32,
-    normal: [3]u32,
-    texture: [3]u32,
+    vertice: ArrayList(u16),
+    normal: ArrayList(u16),
+    texture: ArrayList(u16),
+
+    fn init(self: *Face, content: []const u8, allocator: Allocator) error{Read, OutOfMemory}!void {
+        var offset: usize = 0;
+        var i: usize = 0;
+        var count: u32 = 1;
+
+        for (content) |c| {
+            if (c == ' ') count += 1;
+        }
+        
+        self.vertice = try ArrayList(u16).initCapacity(allocator, count);
+        errdefer self.vertice.deinit();
+
+        self.normal = try ArrayList(u16).initCapacity(allocator, count);
+        errdefer self.normal.deinit();
+
+        self.texture = try ArrayList(u16).initCapacity(allocator, count);
+        errdefer self.texture.deinit();
+
+        while (nonWhitespace(content[offset..], &offset)) |data| : (i += 1) {
+            var dataOffset: usize = 0;
+            if (nonBar(data, &dataOffset)) |number| self.vertice.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
+            if (nonBar(data, &dataOffset)) |number| self.normal.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
+            if (nonBar(data, &dataOffset)) |number| self.texture.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
+        }
+
+        if (i != count) return error.Read;
+    }
+
+    fn deinit(self: *Face) void {
+        self.vertice.deinit();
+        self.normal.deinit();
+        self.texture.deinit();
+    }
 };
+
 const ObjFormat = struct {
     vertices: ArrayList([3]f32),
     normals: ArrayList([3]f32),
-    textureCoords: ArrayList([3]f32),
+    textures: ArrayList([2]f32),
     faces: ArrayList(Face),
 
-    fn init(self: *ObjFormat, path: []const u8, allocator: Allocator) error{OutOfMemory, Read}!void {
+    fn init(self: *ObjFormat, path: []const u8, allocator: Allocator) error{ OutOfMemory, Read }!void {
         const buffer = try allocator.alloc(u8, 1024);
         defer allocator.free(buffer);
 
         const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
 
         var offset: usize = 0;
-        while (until(source[offset..], '\n')) |line| : (offset += line.len) {
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
             if (std.mem.startsWith(u8, line, "v ")) break;
         } else return error.Read;
 
         self.vertices = try ArrayList([3]f32).initCapacity(allocator, 10);
         errdefer self.vertices.deinit();
 
-        while (until(source[offset..], '\n')) |line| : (offset += line.len){
-            if (!std.mem.startsWith(u8, line, "v ")) break;
-            std.debug.print("vertices: {s}", .{line});
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
+            const linePattern = "v ";
+            if (!std.mem.startsWith(u8, line, linePattern)) break;
+            try fillNumber(f32, 3, try self.vertices.addOne(), line[linePattern.len..], nonWhitespace, std.fmt.parseFloat);
         } else return error.Read;
 
         self.normals = try ArrayList([3]f32).initCapacity(allocator, 10);
         errdefer self.normals.deinit();
 
-        while (until(source[offset..], '\n')) |line| : (offset += line.len){
-            if (!std.mem.startsWith(u8, line, "vn ")) break;
-            std.debug.print("normals: {s}", .{line});
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
+            const linePattern = "vn ";
+            if (!std.mem.startsWith(u8, line, linePattern)) break;
+            try fillNumber(f32, 3, try self.normals.addOne(), line[linePattern.len..], nonWhitespace, std.fmt.parseFloat);
         } else return error.Read;
 
-        self.textureCoords = try ArrayList([3]f32).initCapacity(allocator, 10);
-        errdefer self.textureCoords.deinit();
+        self.textures = try ArrayList([2]f32).initCapacity(allocator, 10);
+        errdefer self.textures.deinit();
 
-        while (until(source[offset..], '\n')) |line| : (offset += line.len){
-            if (!std.mem.startsWith(u8, line, "vt ")) break;
-            std.debug.print("textures: {s}", .{line});
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
+            const linePattern = "vt ";
+            if (!std.mem.startsWith(u8, line, linePattern)) break;
+            try fillNumber(f32, 2, try self.textures.addOne(), line[linePattern.len..], nonWhitespace, std.fmt.parseFloat);
         } else return error.Read;
 
-        while (until(source[offset..], '\n')) |line| : (offset += line.len){
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
             if (std.mem.startsWith(u8, line, "f ")) break;
         } else return error.Read;
 
         self.faces = try ArrayList(Face).initCapacity(allocator, 10);
-        errdefer self.faces.deinit();
+        errdefer {
+            self.faces.deinit();
 
-        while (until(source[offset..], '\n')) |line| : (offset += line.len){
-            if (!std.mem.startsWith(u8, line, "f ")) break;
-            std.debug.print("faces: {s}", .{line});
-        }
-    }
-
-    fn until(buffer: []u8, char: u8) ?[]u8 {
-        if (buffer.len == 0) return null;
-
-        var i: u32 = 0;
-
-        while (buffer[i] != char) {
-            i += 1;
-
-            if (i >= buffer.len) {
-                return null;
+            for (self.faces.items) |*face| {
+                face.deinit();
             }
         }
 
-        return buffer[0..i + 1];
+        while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
+            const linePattern = "f ";
+            if (!std.mem.startsWith(u8, line, linePattern)) break;
+
+            const face = try self.faces.addOne();
+            try face.init(line[linePattern.len..], allocator);
+        }
+
+        // std.debug.print("Vertice: \n\t{d}\n", .{self.vertices.items});
+        // std.debug.print("Vertice: \n\t{d}\n", .{self.normals.items});
+        // std.debug.print("Vertice: \n\t{d}\n", .{self.textures.items});
+
+        // for (self.faces.items) |face| {
+        //     std.debug.print("Face: \n\t{d}\n\t{d}\n\t{d}\n", .{face.vertice.items, face.normal.items, face.texture.items});
+        // }
     }
 
     fn deinit(self: *ObjFormat) void {
+        for (self.faces.items) |*face| {
+            face.deinit();
+        }
+
         self.faces.deinit();
-        self.textureCoords.deinit();
+        self.textures.deinit();
         self.normals.deinit();
         self.vertices.deinit();
     }
 };
+
+fn fillNumber(
+    comptime T: type,
+    comptime N: u32,
+    numbers: *[N]T,
+    line: []const u8,
+    skip: fn ([]const u8, *usize) ?[]const u8,
+    format: fn (comptime type, []const u8) T,
+) error{Read}!void {
+    var i: usize = 0;
+    var offset: usize = 0;
+
+    while (skip(line[offset..], &offset)) |number| : (i += 1) {
+        numbers[i] = format(T, number) catch return error.Read;
+    }
+
+    if (i != N) return error.Read;
+}
+
+fn nonWhitespace(buffer: []const u8, offset: *usize) ?[]const u8 {
+    if (buffer.len == 0) return null;
+
+    var start: usize = 0;
+    while (buffer[start] == ' ') {
+        start += 1;
+        if (start >= buffer.len) return null;
+    }
+
+    var end: usize = start;
+    while (buffer[end] != ' ') {
+        end += 1;
+        if (end >= buffer.len) break;
+    }
+
+    offset.* += end;
+
+    return buffer[start..end];
+}
+
+fn nonBar(buffer: []const u8, offset: *usize) ?[]const u8 {
+    if (offset.* >= buffer.len) return null;
+    var start = offset.*;
+
+    if (buffer[start] == '/') start += 1;
+
+    var end = start;
+    while (buffer[end] != '/') {
+        end += 1;
+        if (end >= buffer.len) break;
+    }
+
+    offset.* += end;
+    return buffer[start..end];
+}
+
+fn until(buffer: []const u8, char: u8) ?[]const u8 {
+    if (buffer.len == 0) return null;
+
+    var i: u32 = 0;
+
+    while (buffer[i] != char) {
+        i += 1;
+
+        if (i >= buffer.len) {
+            return null;
+        }
+    }
+
+    return buffer[0..i];
+}
 
 test "Reading file" {
     var obj: ObjFormat = undefined;
