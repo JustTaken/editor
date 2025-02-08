@@ -19,7 +19,6 @@ pub const Mesh = struct {
     array: gl.VertexArray,
     vertex: gl.Buffer,
     index: gl.Buffer,
-    instance: gl.Buffer,
 
     size: u32,
 
@@ -40,7 +39,7 @@ pub const Mesh = struct {
 
         self.array = gl.genVertexArray();
 
-        var buffers: [3]gl.Buffer = undefined;
+        var buffers: [2]gl.Buffer = undefined;
         gl.genBuffers(&buffers);
 
         gl.bindVertexArray(self.array);
@@ -51,13 +50,13 @@ pub const Mesh = struct {
         gl.bindBuffer(self.vertex, .array_buffer);
         gl.bufferData(.array_buffer, Vertex, vertexData.items, .static_draw);
 
+        vertexData.deinit();
+
         inline for (fields, 0..) |field, i| {
             gl.enableVertexAttribArray(@intCast(i));
             gl.vertexAttribDivisor(@intCast(i), 0);
             gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(Vertex), @offsetOf(Vertex, field.name));
         }
-
-        vertexData.deinit();
 
         gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
 
@@ -97,7 +96,6 @@ pub const Mesh = struct {
     pub fn draw(self: Mesh, offset: u32, count: u32) void {
         gl.bindVertexArray(self.array);
 
-        // gl.drawElementsBaseVertex(.triangles, self.size, .unsigned_short, offset, count);
         gl.binding.drawElementsInstancedBaseInstance(gl.binding.TRIANGLES, @intCast(self.size), gl.binding.UNSIGNED_SHORT, @ptrFromInt(0), @intCast(count), @intCast(offset));
 
         gl.bindVertexArray(gl.VertexArray.invalid);
@@ -178,10 +176,8 @@ const ObjFormat = struct {
     fn new(path: []const u8, allocator: Allocator) error{ OutOfMemory, Read }!ObjFormat {
         var self: ObjFormat = undefined;
 
-        const buffer = try allocator.alloc(u8, 1024);
-        defer allocator.free(buffer);
-
-        const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
+        const source = std.fs.cwd().readFileAlloc(allocator, path, 2048) catch return error.Read;
+        defer allocator.free(source);
 
         var offset: usize = 0;
         while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {

@@ -14,8 +14,11 @@ pub const Xkbcommon = struct {
 
     keys: Keys,
 
-    rate: u32,
-    delay: u32,
+    rate: i32,
+    delay: i32,
+    time: isize,
+    repeating: bool,
+    working: bool,
 
     pub fn init(self: *Xkbcommon, keymap: [*:0]const u8, format: wl.Keyboard.KeymapFormat) error{Init, Keymap, State}!void {
         self.context = xkb.xkb_context_new(xkb.XKB_CONTEXT_NO_FLAGS) orelse return error.Init;
@@ -23,6 +26,31 @@ pub const Xkbcommon = struct {
         self.state = xkb.xkb_state_new(self.keymap) orelse return error.State;
         self.keys = Keys.initEmpty();
         self.repeatInfo(20, 200);
+        self.repeating = false;
+        self.working = false;
+        self.time = std.time.milliTimestamp();
+    }
+
+    pub fn get(self: *Xkbcommon, key: Key, milli: i64) bool {
+        if (!self.keys.contains(key)) return false;
+        if (self.time == milli) return true;
+        defer self.working = true;
+
+        if (!self.repeating) {
+            if (milli >= self.time + self.delay) self.repeating = true;
+        }
+
+        if (self.working and !(self.repeating and milli >= self.time + self.rate)) return false;
+
+        self.time = milli;
+
+        return true;
+    }
+
+    fn reset(self: *Xkbcommon) void {
+        self.repeating = false;
+        self.working = false;
+        self.time = std.time.milliTimestamp();
     }
 
     pub fn mask(self: *Xkbcommon, depressed: u32, latched: u32, locked: u32, group: u32) void {
@@ -30,24 +58,39 @@ pub const Xkbcommon = struct {
     }
 
     pub fn repeatInfo(self: *Xkbcommon, rate: i32, delay: i32) void {
-        self.rate = @intCast(rate * std.time.ns_per_ms);
-        self.delay = @intCast(delay * std.time.ns_per_ms);
+        self.rate = rate;
+        self.delay = delay;
     }
 
     pub fn handle(self: *Xkbcommon, code: u32, state: wl.Keyboard.KeyState) void {
         const sym = xkb.xkb_state_key_get_one_sym(self.state, code + EVDEV_SCANCODE_OFFSET);
-        // var name: [64]u8 = undefined;
-
-        // _ = xkb.xkb_keysym_get_name(sym, &name, 64);
 
         const key: Key = std.meta.intToEnum(Key, sym) catch {
-            std.log.err("Failed to register key: {} event", .{sym});
+            var name: [64]u8 = undefined;
+
+            _ = xkb.xkb_keysym_get_name(sym, &name, 64);
+
+            std.log.err("Failed to register key: {s} code: {} event", .{name, sym});
+
             return;
         };
 
         switch (state) {
-            .pressed => self.keys.insert(key),
-            .released => self.keys.remove(key),
+            .pressed => {
+                if (xkb.xkb_keymap_key_repeats(self.keymap, code + EVDEV_SCANCODE_OFFSET) == 0) return;
+
+                self.reset();
+
+                self.keys.toggle(key);
+
+                // var iter = self.keys.iterator();
+
+                // while (iter.next()) |k| {
+                    // std.log.info("Pressing key: {}", .{k});
+                    // self.keys.remove(k);
+                // }
+            },
+            .released => self.keys.toggle(key),
             _ => {},
         }
     }
@@ -55,6 +98,7 @@ pub const Xkbcommon = struct {
 
 pub const Key = enum(u32) {
     Space = 32,
+    Plus = 43,
     Comma = 44,
     Minus = 45,
     Period = 46,
@@ -79,6 +123,7 @@ pub const Key = enum(u32) {
     BracketLeft = 91,
     BracketRight = 93,
 
+    Underscore = 95,
     LowerA = 97,
     LowerB = 98,
     LowerC = 99,
@@ -138,7 +183,5 @@ pub const Key = enum(u32) {
     AltL = 65513,
 
     SuperL = 65515,
-
-    // _,
 };
 

@@ -54,8 +54,8 @@ pub fn main() !void {
 
     uniform.bind(UNIFORM_LOC);
 
-    const instanceTransforms = try shader.newBuffer(Matrix(4), 1, .shader_storage_buffer, .dynamic_draw, .{
-        identity,
+    const instanceTransforms = try shader.newBuffer(Matrix(4), 4, .shader_storage_buffer, .dynamic_draw, .{
+        identity, identity.translate(.{1, 1, 0}), identity.translate(.{-1, 1, 0}), identity.translate(.{1, -1, 0}),
     });
     defer instanceTransforms.deinit();
 
@@ -63,20 +63,39 @@ pub fn main() !void {
 
     instanceTransforms.bind(INSTANCE_LOC);
 
+    var instanceCount: u32 = 0;
+
     while (window.running) {
-        if (window.input.keys.contains(.ArrowLeft)) {
-            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ velocity, 0.0, 0.0 });
-            uniform.pushData(VIEW, 1);
-        } else if (window.input.keys.contains(.ArrowRight)) {
-            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ -velocity, 0.0, 0.0 });
-            uniform.pushData(VIEW, 1);
-        } else if (window.input.keys.contains(.ArrowDown)) {
-            uniform.data[MODEL] = uniform.data[MODEL].rotate(math.rad(-5), Vec(3).init(.{ 1.0, 0.0, 0.0 }));
-            uniform.pushData(MODEL, 1);
-        } else if (window.input.keys.contains(.ArrowUp)) {
-            uniform.data[MODEL] = uniform.data[MODEL].rotate(math.rad(5), Vec(3).init(.{ 1.0, 0.0, 0.0 }));
-            uniform.pushData(MODEL, 1);
+        const time = std.time.milliTimestamp();
+
+        var viewChange = false;
+        var modelChange = false;
+        if (window.input.get(.ArrowLeft, time)) {
+            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ velocity, 0, 0 });
+            viewChange = true;
+        } if (window.input.get(.ArrowRight, time)) {
+            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ -velocity, 0, 0 });
+            viewChange = true;
+        } if (window.input.get(.ArrowDown, time)) {
+            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ 0, velocity, 0 });
+            viewChange = true;
+        } if (window.input.get(.ArrowUp, time)) {
+            uniform.data[VIEW] = uniform.data[VIEW].translate(.{ 0, -velocity, 0 });
+            viewChange = true;
+        } if (window.input.get(.Plus, time)) {
+            uniform.data[MODEL] = uniform.data[MODEL].scale(.{1.2, 1.2, 1, 1});
+            modelChange = true;
+        } if (window.input.get(.Minus, time)) {
+            uniform.data[MODEL] = uniform.data[MODEL].scale(.{0.8, 0.8, 1, 1});
+            modelChange = true;
+        } if (window.input.get(.LowerS, time)) {
+            if (instanceCount < 4) instanceCount += 1;
+        } if (window.input.get(.LowerD, time)) {
+            if (instanceCount > 0) instanceCount -= 1;
         }
+
+        if (viewChange) uniform.pushData(VIEW, 1);
+        if (modelChange) uniform.pushData(MODEL, 1);
 
         if (window.renderer.width != width or window.renderer.height != height) {
             width = window.renderer.width;
@@ -90,7 +109,7 @@ pub fn main() !void {
 
         aCharTexture.bind(samplerLocation, 0);
 
-        rectangle.draw(0, 1);
+        rectangle.draw(0, instanceCount);
 
         aCharTexture.unbind(0);
 
