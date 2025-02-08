@@ -73,10 +73,6 @@ pub const Program = struct {
         return self.handle.uniformLocation(name) orelse return error.NotFound;
     }
 
-    pub fn blockLocation(self: *Program, name: [:0]const u8) error{NotFound}!u32 {
-        return self.handle.uniformBlockIndex(name) orelse return error.NotFound;
-    }
-
     pub fn newMesh(
         self: *Program,
         path: []const u8,

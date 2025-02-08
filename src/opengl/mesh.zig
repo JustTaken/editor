@@ -97,7 +97,8 @@ pub const Mesh = struct {
     pub fn draw(self: Mesh, offset: u32, count: u32) void {
         gl.bindVertexArray(self.array);
 
-        gl.drawElementsInstanced(.triangles, self.size, .unsigned_short, offset, count);
+        // gl.drawElementsBaseVertex(.triangles, self.size, .unsigned_short, offset, count);
+        gl.binding.drawElementsInstancedBaseInstance(gl.binding.TRIANGLES, @intCast(self.size), gl.binding.UNSIGNED_SHORT, @ptrFromInt(0), @intCast(count), @intCast(offset));
 
         gl.bindVertexArray(gl.VertexArray.invalid);
     }

@@ -2,7 +2,7 @@
 
 out vec4 color;
 
-layout (binding = 2) uniform sampler2D textureSampler1;
+layout (binding = 1) uniform sampler2D textureSampler1;
 
 in vec2 outTexture;
 

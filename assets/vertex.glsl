@@ -17,6 +17,6 @@ layout (binding = 0) uniform Matrix {
 out vec2 outTexture;
 
 void main() {
-    gl_Position = vec4(vPos , 1.0f) * model[gl_InstanceID] * modelMatrix * viewMatrix * projectionMatrix;
+    gl_Position = vec4(vPos , 1.0f) * model[gl_InstanceID + gl_BaseInstance] * modelMatrix * viewMatrix * projectionMatrix;
     outTexture = vTexture;
 }

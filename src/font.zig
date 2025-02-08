@@ -17,12 +17,12 @@ pub const FreeType = struct {
     lib: c.FT_Library,
     face: c.FT_Face,
 
-    pub fn new(path: [:0]const u8) error{ Init }!FreeType {
+    pub fn new(path: [:0]const u8, pixelHeight: u32) error{ Init }!FreeType {
         var self: FreeType = undefined;
 
         if (c.FT_Init_FreeType(&self.lib) != 0) return error.Init;
         if (c.FT_New_Face(self.lib, path, 0, &self.face) != 0) return error.Init;
-        if (c.FT_Set_Pixel_Sizes(self.face, 0, 48) != 0) return error.Init;
+        if (c.FT_Set_Pixel_Sizes(self.face, 0, pixelHeight) != 0) return error.Init;
 
         return self;
     }
