@@ -1,34 +1,20 @@
 const std = @import("std");
 const gl = @import("zgl");
 
-const c = @cImport({
-    @cInclude("stb/stb_image.h");
-});
-
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 pub const Texture = struct {
     handle: gl.Texture,
-    name: [:0]const u8,
-    loc: u32,
-    width: u32,
-    height: u32,
-    channels: u32,
-    data: [*]u8,
 
-    pub fn init(
-        self: *Texture,
-        path: [:0]const u8,
-        name: [:0]const u8,
-        loc: u32,
-    ) void {
-        self.loc = loc;
-        self.name = name;
-
-        var width: i32 = undefined;
-        var height: i32 = undefined;
-        var channels: i32 = undefined;
+    pub fn new(
+        width: u32,
+        height: u32,
+        channels: u32,
+        format: gl.TextureInternalFormat,
+        data: [*]u8,
+    ) Texture {
+        var self: Texture = undefined;
 
         self.handle = gl.genTexture();
 
@@ -39,23 +25,28 @@ pub const Texture = struct {
         gl.texParameter(.@"2d", .min_filter, .nearest_mipmap_nearest);
         gl.texParameter(.@"2d", .mag_filter, .nearest);
 
-        self.data = c.stbi_load(path, &width, &height, &channels, 0);
-        defer c.stbi_image_free(self.data);
-
-        self.width = @intCast(width);
-        self.height = @intCast(height);
-        self.channels = @intCast(channels);
-
-        const inputMode: gl.PixelFormat = switch (self.channels) {
+        const inputMode: gl.PixelFormat = switch (channels) {
+            1 => .red,
             3 => .rgb,
             4 => .rgba,
             else => @panic("color mode not supported"),
         };
 
-        gl.textureImage2D(.@"2d", 0, .rgb, self.width, self.height, inputMode, .unsigned_byte, self.data);
+        gl.textureImage2D(.@"2d", 0, format, width, height, inputMode, .unsigned_byte, data);
         gl.generateMipmap(.@"2d");
 
         gl.bindTexture(gl.Texture.invalid, .@"2d");
+
+        return self;
+    }
+
+    pub fn bind(self: *const Texture, loc: u32, index: u32) void {
+        gl.bindTextureUnit(self.handle, index);
+        gl.uniform1i(loc, @intCast(index));
+    }
+
+    pub fn unbind(_: *const Texture, index: u32) void {
+        gl.bindTextureUnit(gl.Texture.invalid, index);
     }
 
     pub fn deinit(self: *const Texture) void {

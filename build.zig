@@ -35,6 +35,7 @@ pub fn build(builder: *Build) !void {
     exe.linkSystemLibrary("wayland-egl");
     exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("EGL");
+    exe.linkSystemLibrary("freetype");
     exe.linkLibC();
 
     builder.installArtifact(exe);

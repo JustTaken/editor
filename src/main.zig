@@ -1,21 +1,16 @@
 const std = @import("std");
 const math = @import("math.zig");
+const lib = @import("root.zig");
+const FreeType = @import("font.zig").FreeType;
 
 const Matrix = math.Matrix;
 const Vec = math.Vec;
 
-const Window = @import("window.zig").Window;
-
-pub const error_handling = .log;
-
-const VertexData = struct {
-    position: Vec(3),
-    color: Vec(3),
-    texture: Vec(2),
-};
+const Window = lib.Window;
+const ShaderProgram = lib.ShaderProgram;
 
 pub fn main() !void {
-    const buffer = try std.heap.page_allocator.alloc(u8, 1 * std.mem.page_size);
+    const buffer = try std.heap.page_allocator.alloc(u8, 4 * std.mem.page_size);
     defer std.heap.page_allocator.free(buffer);
 
     var fixedAllocator = std.heap.FixedBufferAllocator.init(buffer);
@@ -24,48 +19,41 @@ pub fn main() !void {
     var width: u32 = 800;
     var height: u32 = 600;
 
-    try window.init(width, height, fixedAllocator.allocator());
+    const velocity = 10.0;
+
+    try window.init(width, height);
     defer window.deinit();
 
-    const shader = try window.renderer.newProgram("assets/vertex.glsl", "assets/fragment.glsl");
+    var shader = try ShaderProgram.new("assets/vertex.glsl", "assets/fragment.glsl", fixedAllocator.allocator());
     defer shader.deinit();
 
-    const texture = try shader.newTexture("textureSampler1", "assets/container.jpg");
-    defer texture.deinit();
+    const textureSamplerLocation = try shader.uniformLocation("textureSampler1");
 
-    const smileTexture = try shader.newTexture("textureSampler2", "assets/awesomeface.png");
-    defer smileTexture.deinit();
+    var font = try FreeType.new("assets/font.ttf");
+    const aChar = try font.findChar('a');
+    var aCharTexture = shader.newTexture(aChar.width, aChar.height, 1, .red, aChar.buffer);
+    defer aCharTexture.deinit();
 
-    const rectangle = try shader.newMesh(
-        VertexData,
-        &.{
-            .{ .position = Vec(3).init(.{ 1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 1.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 1.0 }) },
-            .{ .position = Vec(3).init(.{ 1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 0.0 }), .texture = Vec(2).init(.{ 1.0, 0.0 }) },
-            .{ .position = Vec(3).init(.{ -1.0, 1.0, 0.0 }), .color = Vec(3).init(.{ 1.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 0.0 }) },
-            .{ .position = Vec(3).init(.{ -1.0, -1.0, 0.0 }), .color = Vec(3).init(.{ 0.0, 0.0, 1.0 }), .texture = Vec(2).init(.{ 0.0, 1.0 }) },
-        },
-        &.{
-            0, 1, 3,
-            1, 2, 3,
-        },
-        2,
-    );
-
+    var rectangle = try shader.newMesh("assets/plane.obj");
     defer rectangle.deinit();
 
     var identity = Matrix(4).identity();
 
-    var uniform = try shader.newUniformBlock("Matrix", Matrix(4), 3, .{
+    var uniform = try shader.newBuffer(Matrix(4), 3, .uniform_buffer, .dynamic_draw, .{
         identity.scale(.{200.0, 400.0, 1.0, 1.0}),
         identity.translate(.{0.0, 0.0, -1.0}),
         identity.ortographic(0.0, 1280.0, 0.0, 720.0, 0.2, 10.0),
     });
     defer uniform.deinit();
 
-    const velocity = 10.0;
+    uniform.bind(0);
 
-    const instance = try rectangle.addInstances(1);
-    _ = instance;
+    const instanceTransforms = try shader.newBuffer(Matrix(4), 1, .shader_storage_buffer, .dynamic_draw, .{
+        identity,
+    });
+    defer instanceTransforms.deinit();
+
+    instanceTransforms.bind(0);
 
     while (window.running) {
         if (window.input.keys.contains(.ArrowLeft)) {
@@ -90,7 +78,15 @@ pub fn main() !void {
             uniform.pushData(2, 1);
         }
 
-        shader.draw(&.{rectangle});
+        shader.start();
+
+        aCharTexture.bind(textureSamplerLocation, 0);
+
+        rectangle.draw(0, 1);
+
+        aCharTexture.unbind(0);
+
+        shader.end();
 
         try window.update();
     }

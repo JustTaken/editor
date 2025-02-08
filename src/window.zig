@@ -6,8 +6,6 @@ const input = @import("input.zig");
 
 const Input = input.Xkbcommon;
 
-const Allocator = std.mem.Allocator;
-
 const Renderer = renderer.OpenGL;
 const Display = display.Wayland;
 
@@ -23,7 +21,6 @@ pub const Window = struct {
         self: *Window,
         width: u32,
         height: u32,
-        allocator: Allocator,
     ) !void {
         try self.display.init(self);
 
@@ -32,7 +29,6 @@ pub const Window = struct {
             height,
             self.display.display,
             self.display.surface,
-            allocator,
         );
 
         self.running = true;

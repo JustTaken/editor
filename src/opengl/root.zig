@@ -1,15 +1,6 @@
 const std = @import("std");
 const gl = @import("zgl");
 const wl = @import("wayland").client.wl;
-const shader = @import("shader.zig");
-
-const ArrayList = std.ArrayList;
-const Allocator = std.mem.Allocator;
-const FixedAllocator = std.heap.FixedBufferAllocator;
-
-const Uniform = shader.Uniform;
-pub const Program = shader.Program;
-pub const TextureInfo = shader.TextureInfo;
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
@@ -25,15 +16,12 @@ pub const OpenGL = struct {
     width: u32,
     height: u32,
 
-    allocator: FixedAllocator,
-
     pub fn init(
         self: *OpenGL,
         width: u32,
         height: u32,
         display: *wl.Display,
         surface: *wl.Surface,
-        allocator: Allocator,
     ) !void {
         self.display = egl.eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, display, null);
 
@@ -127,9 +115,9 @@ pub const OpenGL = struct {
         gl.enable(.debug_output_synchronous);
         gl.enable(.cull_face);
         gl.enable(.depth_test);
+        gl.enable(.blend);
+        gl.blendFunc(.src_alpha, .one_minus_src_alpha);
         gl.debugMessageCallback({}, errorCallback);
-
-        self.allocator = FixedAllocator.init(try allocator.alloc(u8, 4096));
 
         self.width = width;
         self.height = height;
@@ -137,14 +125,6 @@ pub const OpenGL = struct {
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
         gl.clearColor(1.0, 1.0, 0.5, 1.0);
-    }
-
-    pub fn newProgram(self: *OpenGL, vertex: []const u8, fragment: []const u8) error{ Read, Compile, OutOfMemory }!*Program{
-        const program = try self.allocator.allocator().create(Program);
-
-        try program.init(vertex, fragment, self.allocator.allocator());
-
-        return program;
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
@@ -190,6 +170,5 @@ fn getProcAddress(_: type, proc: [:0]const u8) ?*const anyopaque {
 }
 
 fn errorCallback(source: gl.DebugSource, msg_type: gl.DebugMessageType, id: usize, severity: gl.DebugSeverity, message: []const u8) void {
-    std.debug.print("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}\n", .{source, msg_type, id, severity, message});
+    std.debug.print("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}\n", .{ source, msg_type, id, severity, message });
 }
-

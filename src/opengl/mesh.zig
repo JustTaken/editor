@@ -1,54 +1,43 @@
 const std = @import("std");
 const gl = @import("zgl");
+const math = @import("../math.zig");
 
 const Allocator = std.mem.Allocator;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 const ArrayList = std.ArrayList;
 
-const Program = @import("shader.zig").Program;
 const Texture = @import("texture.zig").Texture;
-const Matrix = @import("../math.zig").Matrix;
+const Vec = math.Vec;
 
-const Instance = struct {
-    transform: Matrix(4),
+const Vertex = struct {
+    position: Vec(3),
+    normal: Vec(3),
+    texture: Vec(2),
 };
 
 pub const Mesh = struct {
-    program: *Program,
-
     array: gl.VertexArray,
     vertex: gl.Buffer,
     index: gl.Buffer,
     instance: gl.Buffer,
 
-    instances: ArrayList(Instance),
-
     size: u32,
 
     allocator: FixedBufferAllocator,
 
-    pub fn init(
-        self: *Mesh,
-        program: *Program,
+    pub fn new(
         path: []const u8,
-        maxInstances: u32,
         allocator: Allocator,
-        // comptime T: type,
-        // program: *Program,
-        // vertices: []const T,
-        // indices: []const u32,
-        // maxInstances: u32,
-        // allocator: Allocator,
-    ) error{OutOfMemory}!void {
-        // const fields = @typeInfo(T).Struct.fields;
+    ) error{ OutOfMemory, Read }!Mesh {
+        var self: Mesh = undefined;
 
-        self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, 1024));
+        const fields = @typeInfo(Vertex).Struct.fields;
 
-        const fixedAllocator = self.allocator.allocator();
+        const allocationBuffer = try allocator.alloc(u8, std.mem.page_size);
+        var fixedAllocator = FixedBufferAllocator.init(allocationBuffer);
 
-        self.instances = try ArrayList(Instance).initCapacity(fixedAllocator, maxInstances);
+        var obj = try ObjFormat.new(path, fixedAllocator.allocator());
 
-        self.program = program;
         self.array = gl.genVertexArray();
 
         var buffers: [3]gl.Buffer = undefined;
@@ -56,30 +45,35 @@ pub const Mesh = struct {
 
         gl.bindVertexArray(self.array);
 
+        const vertexData = try obj.getVertexData(fixedAllocator.allocator());
+
         self.vertex = buffers[0];
         gl.bindBuffer(self.vertex, .array_buffer);
-        gl.bufferData(.array_buffer, T, vertices, .static_draw);
+        gl.bufferData(.array_buffer, Vertex, vertexData.items, .static_draw);
 
         inline for (fields, 0..) |field, i| {
             gl.enableVertexAttribArray(@intCast(i));
             gl.vertexAttribDivisor(@intCast(i), 0);
-            gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(T), @offsetOf(T, field.name));
+            gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(Vertex), @offsetOf(Vertex, field.name));
         }
+
+        vertexData.deinit();
 
         gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
 
-        self.instance = buffers[1];
-        gl.bindBuffer(self.instance, .shader_storage_buffer);
-        gl.bufferData(.shader_storage_buffer, Instance, self.instances.unusedCapacitySlice(), .dynamic_draw);
-        gl.bindBufferBase(.shader_storage_buffer, 0, self.instance);
+        const indices = try obj.getIndices(fixedAllocator.allocator());
 
-        self.index = buffers[2];
+        self.index = buffers[1];
         gl.bindBuffer(self.index, .element_array_buffer);
-        gl.bufferData(.element_array_buffer, u32, indices, .static_draw);
+        gl.bufferData(.element_array_buffer, u16, indices.items, .static_draw);
+
+        self.size = @intCast(indices.items.len);
+
+        allocator.free(allocationBuffer);
 
         gl.bindVertexArray(gl.VertexArray.invalid);
 
-        self.size = @intCast(indices.len);
+        return self;
     }
 
     fn getGlType(comptime T: type) gl.Type {
@@ -100,42 +94,10 @@ pub const Mesh = struct {
         };
     }
 
-    pub fn addInstances(self: *Mesh, count: u32) error{OutOfMemory}![]Instance {
-        const capacity = self.instances.capacity;
-        const len = self.instances.items.len;
-
-        if (len + count > capacity) return error.OutOfMemory;
-
-        const instances = self.instances.addManyAtAssumeCapacity(len, count);
-
-        for (instances) |*instance| {
-            instance.transform = Matrix(4).identity();
-        }
-
-        gl.bindBuffer(self.instance, .shader_storage_buffer);
-
-        self.instance.subData(len * @sizeOf(Instance), Instance, self.instances.items[len .. len + count]);
-
-        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
-
-        return instances;
-    }
-
-    pub fn updateInstances(self: *Mesh, instances: []Instance) void {
-        const ptr = @intFromPtr(instances.ptr);
-        const index = ptr / @sizeOf(Instance);
-
-        gl.bindBuffer(self.instance, .shader_storage_buffer);
-
-        self.instance.subData(index * @sizeOf(Instance), Instance, instances);
-
-        gl.bindBuffer(gl.Buffer.invalid, .shader_storage_buffer);
-    }
-
-    pub fn draw(self: *Mesh) void {
+    pub fn draw(self: Mesh, offset: u32, count: u32) void {
         gl.bindVertexArray(self.array);
 
-        gl.drawElementsInstanced(.triangles, self.size, .unsigned_int, 0, self.instances.items.len);
+        gl.drawElementsInstanced(.triangles, self.size, .unsigned_short, offset, count);
 
         gl.bindVertexArray(gl.VertexArray.invalid);
     }
@@ -151,8 +113,13 @@ const Face = struct {
     vertice: ArrayList(u16),
     normal: ArrayList(u16),
     texture: ArrayList(u16),
+    geometry: Geometry,
 
-    fn init(self: *Face, content: []const u8, allocator: Allocator) error{Read, OutOfMemory}!void {
+    const Geometry = enum {
+        Quad,
+    };
+
+    fn init(self: *Face, content: []const u8, allocator: Allocator) error{ Read, OutOfMemory }!void {
         var offset: usize = 0;
         var i: usize = 0;
         var count: u32 = 1;
@@ -160,7 +127,12 @@ const Face = struct {
         for (content) |c| {
             if (c == ' ') count += 1;
         }
-        
+
+        switch (count) {
+            4 => self.geometry = .Quad,
+            else => return error.Read,
+        }
+
         self.vertice = try ArrayList(u16).initCapacity(allocator, count);
         errdefer self.vertice.deinit();
 
@@ -172,18 +144,26 @@ const Face = struct {
 
         while (nonWhitespace(content[offset..], &offset)) |data| : (i += 1) {
             var dataOffset: usize = 0;
-            if (nonBar(data, &dataOffset)) |number| self.vertice.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
-            if (nonBar(data, &dataOffset)) |number| self.normal.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
-            if (nonBar(data, &dataOffset)) |number| self.texture.addOneAssumeCapacity().* = std.fmt.parseInt(u16, number, 10) catch return error.Read else return error.Read;
+            if (nonBar(data, &dataOffset)) |number| self.vertice.addOneAssumeCapacity().* = (std.fmt.parseInt(u16, number, 10) catch return error.Read) - 1 else return error.Read;
+            if (nonBar(data, &dataOffset)) |number| self.texture.addOneAssumeCapacity().* = (std.fmt.parseInt(u16, number, 10) catch return error.Read) - 1 else return error.Read;
+            if (nonBar(data, &dataOffset)) |number| self.normal.addOneAssumeCapacity().* = (std.fmt.parseInt(u16, number, 10) catch return error.Read) - 1 else return error.Read;
         }
 
         if (i != count) return error.Read;
     }
 
-    fn deinit(self: *Face) void {
-        self.vertice.deinit();
-        self.normal.deinit();
-        self.texture.deinit();
+    fn pushIndices(self: *const Face, array: *ArrayList(u16), offset: *u16) error{OutOfMemory}!void {
+        const off = offset.*;
+
+        switch (self.geometry) {
+            .Quad => try array.appendSlice(&.{ 2 + off, 1 + off, 0 + off, 0 + off, 3 + off, 2 + off}),
+        }
+
+        offset.* += self.size();
+    }
+
+    fn size(self: *const Face) u16 {
+        return @intCast(self.vertice.items.len);
     }
 };
 
@@ -191,9 +171,12 @@ const ObjFormat = struct {
     vertices: ArrayList([3]f32),
     normals: ArrayList([3]f32),
     textures: ArrayList([2]f32),
+
     faces: ArrayList(Face),
 
-    fn init(self: *ObjFormat, path: []const u8, allocator: Allocator) error{ OutOfMemory, Read }!void {
+    fn new(path: []const u8, allocator: Allocator) error{ OutOfMemory, Read }!ObjFormat {
+        var self: ObjFormat = undefined;
+
         const buffer = try allocator.alloc(u8, 1024);
         defer allocator.free(buffer);
 
@@ -205,7 +188,6 @@ const ObjFormat = struct {
         } else return error.Read;
 
         self.vertices = try ArrayList([3]f32).initCapacity(allocator, 10);
-        errdefer self.vertices.deinit();
 
         while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
             const linePattern = "v ";
@@ -223,7 +205,6 @@ const ObjFormat = struct {
         } else return error.Read;
 
         self.textures = try ArrayList([2]f32).initCapacity(allocator, 10);
-        errdefer self.textures.deinit();
 
         while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
             const linePattern = "vt ";
@@ -236,13 +217,6 @@ const ObjFormat = struct {
         } else return error.Read;
 
         self.faces = try ArrayList(Face).initCapacity(allocator, 10);
-        errdefer {
-            self.faces.deinit();
-
-            for (self.faces.items) |*face| {
-                face.deinit();
-            }
-        }
 
         while (until(source[offset..], '\n')) |line| : (offset += line.len + 1) {
             const linePattern = "f ";
@@ -252,24 +226,34 @@ const ObjFormat = struct {
             try face.init(line[linePattern.len..], allocator);
         }
 
-        // std.debug.print("Vertice: \n\t{d}\n", .{self.vertices.items});
-        // std.debug.print("Vertice: \n\t{d}\n", .{self.normals.items});
-        // std.debug.print("Vertice: \n\t{d}\n", .{self.textures.items});
-
-        // for (self.faces.items) |face| {
-        //     std.debug.print("Face: \n\t{d}\n\t{d}\n\t{d}\n", .{face.vertice.items, face.normal.items, face.texture.items});
-        // }
+        return self;
     }
 
-    fn deinit(self: *ObjFormat) void {
-        for (self.faces.items) |*face| {
-            face.deinit();
+    fn getVertexData(self: *ObjFormat, allocator: Allocator) error{OutOfMemory}!ArrayList(Vertex) {
+        var vertexData = try ArrayList(Vertex).initCapacity(allocator, self.faces.items.len * 4);
+
+        for (self.faces.items) |face| {
+            for (0..face.size()) |i| {
+                try vertexData.append(.{
+                    .position = Vec(3).init(self.vertices.items[face.vertice.items[i]]),
+                    .normal = Vec(3).init(self.normals.items[face.normal.items[i]]),
+                    .texture = Vec(2).init(self.textures.items[face.texture.items[i]]),
+                });
+            }
         }
 
-        self.faces.deinit();
-        self.textures.deinit();
-        self.normals.deinit();
-        self.vertices.deinit();
+        return vertexData;
+    }
+
+    fn getIndices(self: *ObjFormat, allocator: Allocator) error{OutOfMemory}!ArrayList(u16) {
+        var indices = try ArrayList(u16).initCapacity(allocator, self.faces.items.len * 6);
+
+        var offset: u16 = 0;
+        for (self.faces.items) |face| {
+            try face.pushIndices(&indices, &offset);
+        }
+
+        return indices;
     }
 };
 
@@ -344,7 +328,11 @@ fn until(buffer: []const u8, char: u8) ?[]const u8 {
 }
 
 test "Reading file" {
-    var obj: ObjFormat = undefined;
-    try obj.init("assets/cube.obj", std.testing.allocator);
-    defer obj.deinit();
+    const buffer = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(buffer);
+    var allocator = FixedBufferAllocator.init(buffer);
+
+    var obj = try ObjFormat.new("assets/plane.obj", allocator.allocator());
+    const indices = try obj.getIndices(allocator.allocator());
+    try std.testing.expectEqual(indices.len, 6);
 }
