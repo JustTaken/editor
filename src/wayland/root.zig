@@ -17,7 +17,12 @@ pub const Wayland = struct {
     toplevel: *xdg.Toplevel,
     keyboard: *wl.Keyboard,
 
+    resizeListeners: [3]*anyopaque,
+    resizeFns: [3]*const fn (*anyopaque, u32, u32) void,
+    resizeListenerCount: u32,
+
     pub fn init(self: *Wayland, window: *Window) !void {
+        self.resizeListenerCount = 0;
         self.window = window;
 
         self.display = try wl.Display.connect(null);
@@ -36,6 +41,12 @@ pub const Wayland = struct {
         self.surface.commit();
 
         if (self.display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
+    }
+
+    pub fn newListener(self: *Wayland, listener: *anyopaque, f: *const fn (*anyopaque, u32, u32) void) void {
+        self.resizeListeners[self.resizeListenerCount] = listener;
+        self.resizeFns[self.resizeListenerCount] = f;
+        self.resizeListenerCount += 1;
     }
 
     pub fn update(self: *Wayland) error{Dispatch}!void {
@@ -109,7 +120,16 @@ fn toplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, data: *Wayland)
         .close => data.window.running = false,
         .wm_capabilities => |c| _ = c,
         .configure_bounds => |c| _ = c,
-        .configure => |c| data.window.renderer.resize(c.width, c.height),
+        .configure => |c| {
+            const width: u32 = @intCast(c.width);
+            const height: u32 = @intCast(c.height);
+
+            if (width == 0 and height == 0) return;
+
+            for (0..data.resizeListenerCount) |i| {
+                data.resizeFns[i](data.resizeListeners[i], width, height);
+            }
+        },
     }
 }
 
@@ -119,7 +139,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, data: *Wayland) v
         .modifiers => |m| data.window.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
         .repeat_info => |i| data.window.input.repeatInfo(i.rate, i.delay),
         .enter => |_| {},
-        .leave => |_| {},
+        .leave => |_| data.window.input.leave(),
         .keymap => |k| {
             defer std.posix.close(k.fd);
 

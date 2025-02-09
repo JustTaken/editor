@@ -228,9 +228,9 @@ pub fn Matrix(comptime N: u32) type {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
             return self.mult(.{ .data = .{
-                .{ 2.0 / (right - left), 0.0, 0.0, 0.0 },
-                .{ 0.0, 2.0 / (top - bottom), 0.0, 0.0 },
-                .{ 0.0, 0.0, -2.0 / (far - near), 0.0 },
+                .{ 2.0 / (right - left), 0.0, 0.0, -(right + left) / (right - left) },
+                .{ 0.0, 2.0 / (top - bottom), 0.0, (top + bottom) / (top - bottom) },
+                .{ 0.0, 0.0, -2.0 / (far - near), -(far + near) / (far - near) },
                 .{ 0.0, 0.0, 0.0, 1.0 },
             } });
         }

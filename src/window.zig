@@ -22,6 +22,8 @@ pub const Window = struct {
         width: u32,
         height: u32,
     ) !void {
+
+        self.input = Input.new();
         try self.display.init(self);
 
         try self.renderer.init(
@@ -31,17 +33,27 @@ pub const Window = struct {
             self.display.surface,
         );
 
+        self.display.newListener(&self.renderer, Renderer.resizeListener);
+
         self.running = true;
     }
 
-    pub fn update(self: *Window) !void {
-        try self.renderer.render();
-        try self.display.update();
+    pub fn update(self: *Window) void {
+        self.renderer.render() catch {
+            self.running = false;
+        };
+
+        self.display.update() catch {
+            self.running = false;
+        };
+
+        self.input.tick();
 
         sleep(30);
     }
 
     pub fn deinit(self: *Window) void {
+        self.input.deinit();
         self.renderer.deinit();
         self.display.deinit();
     }

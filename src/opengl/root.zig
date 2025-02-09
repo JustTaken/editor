@@ -117,6 +117,7 @@ pub const OpenGL = struct {
         gl.enable(.depth_test);
         gl.enable(.blend);
         gl.blendFunc(.src_alpha, .one_minus_src_alpha);
+        gl.pixelStore(.unpack_alignment, 1);
         gl.debugMessageCallback({}, errorCallback);
 
         self.width = width;
@@ -124,7 +125,7 @@ pub const OpenGL = struct {
 
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
-        gl.clearColor(1.0, 1.0, 0.5, 1.0);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
@@ -140,14 +141,15 @@ pub const OpenGL = struct {
         gl.clear(.{ .color = true, .depth = true });
     }
 
-    pub fn resize(self: *OpenGL, width: i32, height: i32) void {
-        if (width == 0 or height == 0) return;
+    pub fn resizeListener(ptr: *anyopaque, width: u32, height: u32) void {
+        const self: *OpenGL = @ptrCast(@alignCast(ptr));
+
         if (width == self.width and height == self.height) return;
 
-        self.width = @intCast(width);
-        self.height = @intCast(height);
+        self.width = width;
+        self.height = height;
 
-        self.window.resize(width, height, 0, 0);
+        self.window.resize(@intCast(width), @intCast(height), 0, 0);
 
         gl.viewport(0, 0, self.width, self.height);
         gl.scissor(0, 0, self.width, self.height);
@@ -170,5 +172,5 @@ fn getProcAddress(_: type, proc: [:0]const u8) ?*const anyopaque {
 }
 
 fn errorCallback(source: gl.DebugSource, msg_type: gl.DebugMessageType, id: usize, severity: gl.DebugSeverity, message: []const u8) void {
-    std.debug.print("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}\n", .{ source, msg_type, id, severity, message });
+    std.log.err("sourcee: {}, typ: {}, id: {}, severity: {}\n{s}", .{ source, msg_type, id, severity, message });
 }

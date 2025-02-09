@@ -14,43 +14,84 @@ pub const Xkbcommon = struct {
 
     keys: Keys,
 
+    listeners: [3]*anyopaque,
+    listenerFns: [3]*const fn (*anyopaque, *Keys, bool, bool) void,
+    listenerCount: u32,
+    // listener: *anyopaque,
+    // hasListener: bool,
+
+    activeCount: u32,
+
+    controlIndex: u32,
+    altIndex: u32,
+
     rate: i32,
     delay: i32,
+
     time: isize,
     repeating: bool,
     working: bool,
 
-    pub fn init(self: *Xkbcommon, keymap: [*:0]const u8, format: wl.Keyboard.KeymapFormat) error{Init, Keymap, State}!void {
-        self.context = xkb.xkb_context_new(xkb.XKB_CONTEXT_NO_FLAGS) orelse return error.Init;
-        self.keymap = xkb.xkb_keymap_new_from_string(self.context, keymap, @intCast(@intFromEnum(format)), xkb.XKB_KEYMAP_COMPILE_NO_FLAGS) orelse return error.Keymap;
-        self.state = xkb.xkb_state_new(self.keymap) orelse return error.State;
+    pub fn new() Xkbcommon {
+        var self: Xkbcommon = undefined;
+
         self.keys = Keys.initEmpty();
         self.repeatInfo(20, 200);
         self.repeating = false;
         self.working = false;
+        self.activeCount = 0;
+        self.listenerCount = 0;
+
+        return self;
+    }
+    pub fn init(self: *Xkbcommon, keymap: [*:0]const u8, format: wl.Keyboard.KeymapFormat) error{ Init, Keymap, State }!void {
+        self.context = xkb.xkb_context_new(xkb.XKB_CONTEXT_NO_FLAGS) orelse return error.Init;
+        self.keymap = xkb.xkb_keymap_new_from_string(self.context, keymap, @intCast(@intFromEnum(format)), xkb.XKB_KEYMAP_COMPILE_NO_FLAGS) orelse return error.Keymap;
+        self.state = xkb.xkb_state_new(self.keymap) orelse return error.State;
+
+        self.controlIndex = xkb.xkb_keymap_mod_get_index(self.keymap, xkb.XKB_MOD_NAME_CTRL);
+        self.altIndex = xkb.xkb_keymap_mod_get_index(self.keymap, xkb.XKB_MOD_NAME_ALT);
+
         self.time = std.time.milliTimestamp();
     }
 
-    pub fn get(self: *Xkbcommon, key: Key, milli: i64) bool {
-        if (!self.keys.contains(key)) return false;
-        if (self.time == milli) return true;
-        defer self.working = true;
-
-        if (!self.repeating) {
-            if (milli >= self.time + self.delay) self.repeating = true;
-        }
-
-        if (self.working and !(self.repeating and milli >= self.time + self.rate)) return false;
-
-        self.time = milli;
-
-        return true;
-    }
-
-    fn reset(self: *Xkbcommon) void {
+    fn resetRepeat(self: *Xkbcommon) void {
         self.repeating = false;
         self.working = false;
         self.time = std.time.milliTimestamp();
+
+        // var iter = self.keys.iterator();
+
+        // while (iter.next()) |k| {
+        //     self.keys.remove(k);
+        // }
+    }
+
+    pub fn tick(self: *Xkbcommon) void {
+        if (self.activeCount == 0) return;
+        const time = std.time.milliTimestamp();
+
+        if (!self.repeating) {
+            if (time >= self.time + self.delay) self.repeating = true;
+        }
+
+        if (self.working and !(self.repeating and time >= self.time + self.rate)) return;
+
+        self.time = time;
+        self.working = true;
+
+        const controlPressed = self.isControlPressed();
+        const altPressed = self.isAltPressed();
+
+        for (0..self.listenerCount) |i| {
+            self.listenerFns[i](self.listeners[i], &self.keys, controlPressed, altPressed);
+        }
+    }
+
+    pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, *Keys, bool, bool) void) void {
+        self.listeners[self.listenerCount] = listener;
+        self.listenerFns[self.listenerCount] = f;
+        self.listenerCount += 1;
     }
 
     pub fn mask(self: *Xkbcommon, depressed: u32, latched: u32, locked: u32, group: u32) void {
@@ -62,6 +103,22 @@ pub const Xkbcommon = struct {
         self.delay = delay;
     }
 
+    pub fn isControlPressed(self: *const Xkbcommon) bool {
+        return xkb.xkb_state_mod_index_is_active(self.state, self.controlIndex, xkb.XKB_STATE_MODS_DEPRESSED) != 0;
+    }
+
+    pub fn isAltPressed(self: *const Xkbcommon) bool {
+        return xkb.xkb_state_mod_index_is_active(self.state, self.altIndex, xkb.XKB_STATE_LAYOUT_EFFECTIVE) != 0;
+    }
+
+    pub fn leave(self: *Xkbcommon) void {
+        var iter = self.keys.iterator();
+
+        while (iter.next()) |k| {
+            self.keys.remove(k);
+        }
+    }
+
     pub fn handle(self: *Xkbcommon, code: u32, state: wl.Keyboard.KeyState) void {
         const sym = xkb.xkb_state_key_get_one_sym(self.state, code + EVDEV_SCANCODE_OFFSET);
 
@@ -70,7 +127,7 @@ pub const Xkbcommon = struct {
 
             _ = xkb.xkb_keysym_get_name(sym, &name, 64);
 
-            std.log.err("Failed to register key: {s} code: {} event", .{name, sym});
+            std.log.err("Failed to register key: {s} code: {} event", .{ name, sym });
 
             return;
         };
@@ -79,22 +136,31 @@ pub const Xkbcommon = struct {
             .pressed => {
                 if (xkb.xkb_keymap_key_repeats(self.keymap, code + EVDEV_SCANCODE_OFFSET) == 0) return;
 
-                self.reset();
+                self.resetRepeat();
+
+                self.keys.insert(key);
+
+                self.activeCount += 1;
+            },
+            .released => {
+                if (!self.keys.contains(key)) return;
 
                 self.keys.toggle(key);
 
-                // var iter = self.keys.iterator();
-
-                // while (iter.next()) |k| {
-                    // std.log.info("Pressing key: {}", .{k});
-                    // self.keys.remove(k);
-                // }
+                self.activeCount -= 1;
             },
-            .released => self.keys.toggle(key),
             _ => {},
         }
     }
+
+    pub fn deinit(self: *const Xkbcommon) void {
+        xkb.xkb_state_unref(self.state);
+        xkb.xkb_keymap_unref(self.keymap);
+        xkb.xkb_context_unref(self.context);
+    }
 };
+
+pub const NO_DISPLAY_START: u32 = 65000;
 
 pub const Key = enum(u32) {
     Space = 32,
@@ -138,6 +204,7 @@ pub const Key = enum(u32) {
     LowerL = 108,
     LowerM = 109,
     LowerN = 110,
+    LowerO = 111,
     LowerP = 112,
     LowerQ = 113,
     LowerR = 114,
@@ -179,9 +246,10 @@ pub const Key = enum(u32) {
 
     ShiftL = 65505,
     ShiftR = 65506,
+    CapsLock = 65509,
+    MetaL = 65511,
 
     AltL = 65513,
 
     SuperL = 65515,
 };
-

@@ -20,6 +20,7 @@ pkgs.mkShell {
     freetype.dev
     freetype
     gdb
+    renderdoc
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib:${pkgs.freetype}/lib";

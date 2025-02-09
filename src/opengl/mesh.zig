@@ -155,7 +155,7 @@ const Face = struct {
         const off = offset.*;
 
         switch (self.geometry) {
-            .Quad => try array.appendSlice(&.{ 2 + off, 1 + off, 0 + off, 0 + off, 3 + off, 2 + off}),
+            .Quad => try array.appendSlice(&.{ 2 + off, 1 + off, 0 + off, 0 + off, 3 + off, 2 + off }),
         }
 
         offset.* += self.size();

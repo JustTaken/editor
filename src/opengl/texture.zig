@@ -1,43 +1,81 @@
 const std = @import("std");
 const gl = @import("zgl");
 
+const c = @cImport({
+    @cInclude("stb/stb_image.h");
+});
+
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
 pub const Texture = struct {
     handle: gl.Texture,
 
-    pub fn new(
-        width: u32,
-        height: u32,
-        channels: u32,
-        format: gl.TextureInternalFormat,
-        data: [*]u8,
-    ) Texture {
-        var self: Texture = undefined;
+    pub fn fromPath(path: [:0]const u8, internalFormat: gl.TextureInternalFormat, pixelType: gl.PixelType) Texture {
+        var width: i32 = 0;
+        var height: i32 = 0;
+        var channels: i32 = 0;
 
-        self.handle = gl.genTexture();
+        const data = c.stbi_load(path, &width, &height, &channels, 0);
+        defer c.stbi_image_free(data);
 
-        gl.bindTexture(self.handle, .@"2d");
-
-        gl.texParameter(.@"2d", .wrap_s, .mirrored_repeat);
-        gl.texParameter(.@"2d", .wrap_t, .mirrored_repeat);
-        gl.texParameter(.@"2d", .min_filter, .nearest_mipmap_nearest);
-        gl.texParameter(.@"2d", .mag_filter, .nearest);
-
-        const inputMode: gl.PixelFormat = switch (channels) {
+        const dataFormat: gl.PixelFormat = switch (channels) {
             1 => .red,
             3 => .rgb,
             4 => .rgba,
             else => @panic("color mode not supported"),
         };
 
-        gl.textureImage2D(.@"2d", 0, format, width, height, inputMode, .unsigned_byte, data);
-        gl.generateMipmap(.@"2d");
+        return Texture.new(
+            @intCast(width),
+            @intCast(height),
+            internalFormat,
+            dataFormat,
+            pixelType,
+            .@"2d",
+            null,
+            data,
+        );
+    }
 
-        gl.bindTexture(gl.Texture.invalid, .@"2d");
+    pub fn new(
+        width: u32,
+        height: u32,
+        depth: ?u32,
+        internalFormat: gl.TextureInternalFormat,
+        dataFormat: gl.PixelFormat,
+        pixelType: gl.PixelType,
+        target: gl.TextureTarget,
+        data: ?[*]const u8,
+    ) Texture {
+        var self: Texture = undefined;
+
+        self.handle = gl.genTexture();
+
+        gl.bindTexture(self.handle, target);
+
+        gl.texParameter(target, .wrap_s, .mirrored_repeat);
+        gl.texParameter(target, .wrap_t, .mirrored_repeat);
+        gl.texParameter(target, .min_filter, .linear);
+        gl.texParameter(target, .mag_filter, .nearest);
+
+        if (depth) |d| gl.textureImage3D(target, 0, internalFormat, width, height, d, dataFormat, pixelType, data) else gl.textureImage2D(target, 0, internalFormat, width, height, dataFormat, pixelType, data);
+
+        gl.bindTexture(gl.Texture.invalid, target);
 
         return self;
+    }
+
+    pub fn pushData(
+        self: *const Texture,
+        width: u32,
+        height: u32,
+        depth: ?u32,
+        dataFormat: gl.PixelFormat,
+        pixelType: gl.PixelType,
+        data: ?[*]const u8,
+    ) void {
+        if (depth) |d| gl.textureSubImage3D(self.handle, 0, 0, 0, d, width, height, 1, dataFormat, pixelType, data) else gl.textureSubImage2D(self.handle, 0, 0, 0, width, height, dataFormat, pixelType, data);
     }
 
     pub fn bind(self: *const Texture, loc: u32, index: u32) void {
