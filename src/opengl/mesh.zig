@@ -37,12 +37,8 @@ pub const Mesh = struct {
 
         var obj = try ObjFormat.new(path, fixedAllocator.allocator());
 
-        self.array = gl.genVertexArray();
-
         var buffers: [2]gl.Buffer = undefined;
         gl.genBuffers(&buffers);
-
-        gl.bindVertexArray(self.array);
 
         const vertexData = try obj.getVertexData(fixedAllocator.allocator());
 
@@ -51,12 +47,6 @@ pub const Mesh = struct {
         gl.bufferData(.array_buffer, Vertex, vertexData.items, .static_draw);
 
         vertexData.deinit();
-
-        inline for (fields, 0..) |field, i| {
-            gl.enableVertexAttribArray(@intCast(i));
-            gl.vertexAttribDivisor(@intCast(i), 0);
-            gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(Vertex), @offsetOf(Vertex, field.name));
-        }
 
         gl.bindBuffer(gl.Buffer.invalid, .array_buffer);
 
@@ -69,6 +59,17 @@ pub const Mesh = struct {
         self.size = @intCast(indices.items.len);
 
         allocator.free(allocationBuffer);
+
+        self.array = gl.genVertexArray();
+        gl.bindVertexArray(self.array);
+        gl.bindBuffer(self.index, .element_array_buffer);
+        gl.bindBuffer(self.vertex, .array_buffer);
+
+        inline for (fields, 0..) |field, i| {
+            gl.enableVertexAttribArray(@intCast(i));
+            gl.vertexAttribDivisor(@intCast(i), 0);
+            gl.vertexAttribPointer(@intCast(i), field.type.size(), getGlType(field.type.inner()), false, @sizeOf(Vertex), @offsetOf(Vertex, field.name));
+        }
 
         gl.bindVertexArray(gl.VertexArray.invalid);
 

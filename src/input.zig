@@ -15,7 +15,7 @@ pub const Xkbcommon = struct {
     keys: Keys,
 
     listeners: [3]*anyopaque,
-    listenerFns: [3]*const fn (*anyopaque, *Keys, bool, bool) void,
+    listenerFns: [3]*const fn (*anyopaque, *const Keys, bool, bool) void,
     listenerCount: u32,
     // listener: *anyopaque,
     // hasListener: bool,
@@ -60,11 +60,11 @@ pub const Xkbcommon = struct {
         self.working = false;
         self.time = std.time.milliTimestamp();
 
-        // var iter = self.keys.iterator();
+        var iter = self.keys.iterator();
 
-        // while (iter.next()) |k| {
-        //     self.keys.remove(k);
-        // }
+        while (iter.next()) |k| {
+            self.keys.remove(k);
+        }
     }
 
     pub fn tick(self: *Xkbcommon) void {
@@ -83,12 +83,13 @@ pub const Xkbcommon = struct {
         const controlPressed = self.isControlPressed();
         const altPressed = self.isAltPressed();
 
+        const keys = self.keys;
         for (0..self.listenerCount) |i| {
-            self.listenerFns[i](self.listeners[i], &self.keys, controlPressed, altPressed);
+            self.listenerFns[i](self.listeners[i], &keys, controlPressed, altPressed);
         }
     }
 
-    pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, *Keys, bool, bool) void) void {
+    pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, *const Keys, bool, bool) void) void {
         self.listeners[self.listenerCount] = listener;
         self.listenerFns[self.listenerCount] = f;
         self.listenerCount += 1;
@@ -164,6 +165,16 @@ pub const NO_DISPLAY_START: u32 = 65000;
 
 pub const Key = enum(u32) {
     Space = 32,
+    Exclamation = 33,
+    DoubleQuote = 34,
+    NumberSign = 35,
+    Dollar = 36,
+    Percent = 37,
+    Anpersand = 38,
+    Apostrophe = 39,
+    ParenLeft = 40,
+    ParenRight = 41,
+    Asterisk = 42,
     Plus = 43,
     Comma = 44,
     Minus = 45,
@@ -183,13 +194,43 @@ pub const Key = enum(u32) {
     Semicolon = 59,
 
     Equal = 61,
+    Question = 63,
+    At = 64,
 
-    Backslash = 92,
+    UpperA = 65,
+    UpperB = 66,
+    UpperC = 67,
+    UpperD = 68,
+    UpperE = 69,
+    UpperF = 70,
+    UpperG = 71,
+    UpperH = 72,
+    UpperI = 73,
+    UpperJ = 74,
+    UpperK = 75,
+    UpperL = 76,
+    UpperM = 77,
+    UpperN = 78,
+    UpperO = 79,
+    UpperP = 80,
+    UpperQ = 81,
+    UpperR = 82,
+    UpperT = 83,
+    UpperU = 84,
+    UpperS = 85,
+    UpperV = 86,
+    UpperW = 87,
+    UpperX = 88,
+    UpperY = 89,
+    UpperZ = 90,
 
     BracketLeft = 91,
+    Backslash = 92,
     BracketRight = 93,
+    Circum = 94,
 
     Underscore = 95,
+
     LowerA = 97,
     LowerB = 98,
     LowerC = 99,
@@ -216,6 +257,9 @@ pub const Key = enum(u32) {
     LowerX = 120,
     LowerY = 121,
     LowerZ = 122,
+    BraceLeft = 123,
+    Pipe = 124,
+    BreceRight = 125,
 
     ControlL = 65507,
     ControlR = 65508,

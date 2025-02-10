@@ -9,7 +9,8 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 const Matrix = math.Matrix;
 
 const Window = lib.Window;
-const ShaderProgram = lib.ShaderProgram;
+const Program = lib.Program;
+const Shader = lib.Shader;
 const TextBuffer = text.TextBuffer;
 const Buffer = lib.Buffer;
 
@@ -18,7 +19,6 @@ const Key = input.Key;
 
 const IDENTITY = Matrix(4).identity();
 
-const UNIFORM_MATRICES_LOC = 0;
 const VELOCITY: f32 = 10.0;
 
 const WIDTH: f32 = 800;
@@ -27,32 +27,54 @@ const NEAR: f32 = 1;
 const FAR: f32 = 10;
 const SIZE: u16 = 32;
 
+const CHAR_COUNT: u32 = 64;
+const GLYPH_MAX: u32 = 1024;
+const INSTANCE_MAX: u32 = GLYPH_MAX + 1;
+
 pub fn main() !void {
     const buffer = try std.heap.page_allocator.alloc(u8, 4 * std.mem.page_size);
     defer std.heap.page_allocator.free(buffer);
 
     var fixedAllocator = FixedBufferAllocator.init(buffer);
+    const allocator = fixedAllocator.allocator();
     var window: Window = undefined;
 
     try window.init(WIDTH, HEIGHT);
     defer window.deinit();
 
-    var shader = try ShaderProgram.new(
-        "assets/vertex.glsl",
-        "assets/fragment.glsl",
-        fixedAllocator.allocator(),
-    );
-    defer shader.deinit();
+    const vertexShader = try Shader.fromPath(.vertex, "assets/vertex.glsl", allocator);
+    const fragmentShader = try Shader.fromPath(.fragment, "assets/fragment.glsl", allocator);
 
-    var global = Global.new(WIDTH, HEIGHT, SIZE, 0);
+    var withTextureProgram = try Program.new(vertexShader, fragmentShader, allocator);
+    defer withTextureProgram.deinit();
+
+    fragmentShader.deinit();
+
+    const rawFragmentShader = try Shader.fromPath(.fragment, "assets/rawFrag.glsl", allocator);
+
+    var nonTextureProgram = try Program.new(vertexShader, rawFragmentShader, allocator);
+    defer nonTextureProgram.deinit();
+
+    vertexShader.deinit();
+    rawFragmentShader.deinit();
+
+    var global = Global.new(WIDTH, HEIGHT, SIZE, 0.8, INSTANCE_MAX);
     defer global.deinit();
 
     window.display.newListener(&global, Global.resizeListen);
     window.input.newListener(&global, Global.keyListen);
 
-    const samplerLocation = try shader.uniformLocation("textureSampler1");
+    const samplerLocation = try withTextureProgram.uniformLocation("textureSampler1");
 
-    var charWriter = try TextBuffer.new(SIZE, 128, 32, samplerLocation, fixedAllocator.allocator());
+    var charWriter = try TextBuffer.new(
+        SIZE,
+        GLYPH_MAX,
+        CHAR_COUNT,
+        samplerLocation,
+        &global.instances,
+        &global.textureIndices,
+        allocator,
+    );
     defer charWriter.deinit();
 
     window.input.newListener(&charWriter, TextBuffer.listen);
@@ -60,40 +82,58 @@ pub fn main() !void {
     while (window.running) {
         defer window.update();
 
-        shader.start();
+        withTextureProgram.start();
+        charWriter.drawChars();
+        withTextureProgram.end();
 
-        charWriter.draw();
-
-        shader.end();
+        nonTextureProgram.start();
+        charWriter.drawCursors();
+        nonTextureProgram.end();
     }
 }
 
 const Global = struct {
     model: Matrix(4),
     view: Matrix(4),
+    scale: Matrix(4),
 
+    instances: Buffer(Matrix(4)),
+    textureIndices: Buffer(u32),
     uniform: Buffer(Matrix(4)),
-    uniformLoc: u32,
 
-    fn new(width: u32, height: u32, size: u32, loc: u32) Global {
+    fn new(
+        width: u32,
+        height: u32,
+        size: u32,
+        scale: f32,
+        instanceMax: u32,
+    ) Global {
         var self: Global = undefined;
 
-        const fsize: f32 = @floatFromInt(size);
+        self.instances = Buffer(Matrix(4)).new(.shader_storage_buffer, instanceMax, null);
+        self.textureIndices = Buffer(u32).new(.shader_storage_buffer, instanceMax, null);
+
+        const fsize: f32 = @floatFromInt(size / 2);
+
         self.model = IDENTITY.scale(.{ fsize, fsize, 1, 1 });
         self.view = IDENTITY.translate(.{ fsize, -fsize, -1 });
-        self.uniform = Buffer(Matrix(4)).new(.uniform_buffer, 3, &.{
+        self.scale = IDENTITY.scale(.{ scale, scale, 1, 1 });
+
+        self.uniform = Buffer(Matrix(4)).new(.uniform_buffer, 4, &.{
             self.model,
             self.view,
-            IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), 0.2, 10),
+            self.scale,
+            IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), NEAR, FAR),
         });
 
-        self.uniformLoc = loc;
-        self.uniform.bind(loc);
+        self.uniform.bind(0);
+        self.instances.bind(0);
+        self.textureIndices.bind(1);
 
         return self;
     }
 
-    fn keyListen(ptr: *anyopaque, keys: *EnumSet(Key), controlActive: bool, altActive: bool) void {
+    fn keyListen(ptr: *anyopaque, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
         const self: *Global = @ptrCast(@alignCast(ptr));
 
         _ = controlActive;
@@ -124,14 +164,16 @@ const Global = struct {
         const self: *Global = @ptrCast(@alignCast(ptr));
 
         self.uniform.pushData(
-            2,
+            3,
             &.{
-                IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), 0.2, 10),
+                IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), NEAR, FAR),
             },
         );
     }
 
     fn deinit(self: *const Global) void {
+        self.textureIndices.deinit();
+        self.instances.deinit();
         self.uniform.deinit();
     }
 };

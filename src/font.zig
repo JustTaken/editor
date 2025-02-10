@@ -17,6 +17,7 @@ pub const FreeType = struct {
     lib: c.FT_Library,
     face: c.FT_Face,
     height: u16,
+    width: u16,
 
     pub fn new(path: [:0]const u8, size: u32) error{Init}!FreeType {
         var self: FreeType = undefined;
@@ -24,7 +25,9 @@ pub const FreeType = struct {
         if (c.FT_Init_FreeType(&self.lib) != 0) return error.Init;
         if (c.FT_New_Face(self.lib, path, 0, &self.face) != 0) return error.Init;
         if (c.FT_Set_Pixel_Sizes(self.face, size, size) != 0) return error.Init;
-        self.height = @intCast((self.face[0].size[0].metrics.ascender - self.face[0].size[0].metrics.descender) >> 5);
+
+        self.height = @intCast((self.face[0].size[0].metrics.ascender - self.face[0].size[0].metrics.descender) >> 6);
+        self.width = @intCast(self.face[0].size[0].metrics.max_advance >> 6);
 
         return self;
     }

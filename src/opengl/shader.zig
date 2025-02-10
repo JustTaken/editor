@@ -7,22 +7,15 @@ pub const Program = struct {
     handle: gl.Program,
 
     pub fn new(
-        vertexPath: []const u8,
-        fragmentPath: []const u8,
+        vertex: Shader,
+        fragment: Shader,
         allocator: Allocator,
     ) error{ Read, Compile, OutOfMemory }!Program {
         var self: Program = undefined;
         self.handle = gl.Program.create();
 
-        const vertex = try shader(.vertex, vertexPath, allocator);
-        defer vertex.delete();
-
-        self.handle.attach(vertex);
-
-        const fragment = try shader(.fragment, fragmentPath, allocator);
-        defer fragment.delete();
-
-        self.handle.attach(fragment);
+        self.handle.attach(vertex.handle);
+        self.handle.attach(fragment.handle);
 
         self.handle.link();
 
@@ -51,24 +44,36 @@ pub const Program = struct {
     }
 };
 
-fn shader(kind: gl.ShaderType, path: []const u8, allocator: Allocator) error{ Read, Compile, OutOfMemory }!gl.Shader {
-    const buffer = try allocator.alloc(u8, 1024);
-    defer allocator.free(buffer);
+pub const Shader = struct {
+    handle: gl.Shader,
+    kind: gl.ShaderType,
 
-    const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
+    pub fn fromPath(kind: gl.ShaderType, path: []const u8, allocator: Allocator) error{ Read, Compile, OutOfMemory}!Shader {
+        var self: Shader = undefined;
+        self.kind = kind;
 
-    const self = gl.Shader.create(kind);
+        const buffer = try allocator.alloc(u8, 1024);
+        defer allocator.free(buffer);
 
-    self.source(1, &source);
-    self.compile();
+        const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
 
-    if (0 == self.get(.compile_status)) {
-        const result = try self.getCompileLog(allocator);
+        self.handle = gl.Shader.create(kind);
 
-        std.log.err("shader compilation: {s}", .{result});
+        self.handle.source(1, &source);
+        self.handle.compile();
 
-        return error.Compile;
+        if (0 == self.handle.get(.compile_status)) {
+            const result = try self.handle.getCompileLog(allocator);
+
+            std.log.err("shader compilation: {s}", .{result});
+
+            return error.Compile;
+        }
+
+        return self;
     }
 
-    return self;
-}
+    pub fn deinit(self: *const Shader) void {
+        self.handle.delete();
+    }
+};

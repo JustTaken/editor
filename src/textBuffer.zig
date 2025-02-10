@@ -15,40 +15,35 @@ const Buffer = lib.Buffer;
 const Mesh = lib.Mesh;
 
 const Matrix = math.Matrix;
-const Vec = math.Vec;
 
-const MAX_CHAR_INSTANCES: u32 = 128;
-const MAX_TOTAL_INSTANCES: u32 = 1024;
+const Key = input.Key;
 
 const IDENTITY = Matrix(4).identity();
 
-const Input = input.Xkbcommon;
-const Key = input.Key;
-
 const VELOCITY: f32 = 1.0;
-
-const INSTANCE_MODEL_LOCATION: u32 = 0;
-const INDEX_MODEL_LOCATION: u32 = 1;
 
 pub const TextBuffer = struct {
     font: FreeType,
     chars: Map(u32, CharSet),
     rectangle: Mesh,
 
+    instances: Buffer(Matrix(4)).Manager,
+    textureIndices: Buffer(u32).Manager,
     texture: Texture,
 
-    indexToInstances: Buffer(u32),
-    instanceTransforms: Buffer(Matrix(4)),
+
     instanceCount: u32,
     instanceMax: u32,
 
     textureLocation: u32,
 
+    cursorTransform: Matrix(4),
     cursorX: f32,
     cursorY: f32,
+    cursorIndex: u32,
 
-    charCount: u16,
-    charMax: u32,
+    textureCount: u16,
+    textureMax: u32,
     size: u16,
 
     const CharSet = struct {
@@ -58,45 +53,61 @@ pub const TextBuffer = struct {
     };
 
     pub fn new(
-        size: u16,
+        comptime size: u16,
         instanceMax: u32,
-        charMax: u32,
+        textureMax: u32,
         textureLocation: u32,
+        instances: *Buffer(Matrix(4)),
+        textureIndices: *Buffer(u32),
         allocator: Allocator,
     ) error{ Init, Read, OutOfMemory }!TextBuffer {
         var self: TextBuffer = undefined;
 
-        self.instanceTransforms = Buffer(Matrix(4)).new(.shader_storage_buffer, instanceMax, null);
-        self.indexToInstances = Buffer(u32).new(.shader_storage_buffer, instanceMax, null);
-        self.texture = Texture.new(size, size, charMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
+        const overSize = size + 2;
+        self.texture = Texture.new(overSize, overSize, textureMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
+
+        self.instances = try instances.getSlice(instanceMax);
+        self.textureIndices = try textureIndices.getSlice(instanceMax);
         self.rectangle = try Mesh.new("assets/plane.obj", allocator);
 
+        self.size = overSize;
         self.textureLocation = textureLocation;
-        self.size = size;
         self.instanceMax = instanceMax;
-        self.charMax = charMax;
+        self.textureMax = textureMax;
 
         self.cursorX = 0;
         self.cursorY = 0;
         self.instanceCount = 0;
-        self.charCount = 0;
+        self.textureCount = 0;
+        self.cursorIndex = 0;
 
         self.font = try FreeType.new("assets/font.ttf", size);
         self.chars = Map(u32, CharSet).init(allocator);
-        try self.chars.ensureTotalCapacity(charMax * 2);
+        try self.chars.ensureTotalCapacity(textureMax * 2);
 
-        std.log.info("Font height: {}, self size: {}", .{self.font.height, self.size});
+        self.initCursor();
 
         return self;
     }
 
-    pub fn listen(ptr: *anyopaque, keys: *EnumSet(Key), controlActive: bool, altActive: bool) void {
+    fn initCursor(self: *TextBuffer) void {
+        self.cursorIndex = self.instanceCount;
+        self.instanceCount += 1;
+
+        const heightScale = @as(f32, @floatFromInt(self.font.height)) / @as(f32, @floatFromInt(self.size));
+        const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.size));
+        self.cursorTransform = IDENTITY.scale(.{widthScale, heightScale, 1, 1}).translate(.{-@as(f32, @floatFromInt(self.font.width)) / 2.0, 0, 0 });
+
+        self.updateCursor();
+    }
+
+    pub fn listen(ptr: *anyopaque, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
         const self: *TextBuffer = @ptrCast(@alignCast(ptr));
 
         if (controlActive or altActive) self.processWithModifiers(keys, controlActive, altActive) else self.processKeys(keys);
     }
 
-    fn processKeys(self: *TextBuffer, keys: *EnumSet(Key)) void {
+    fn processKeys(self: *TextBuffer, keys: *const EnumSet(Key)) void {
         var iter = keys.iterator();
 
         while (iter.next()) |k| {
@@ -129,12 +140,13 @@ pub const TextBuffer = struct {
             .Enter => {
                 self.cursorY -= @floatFromInt(self.font.height);
                 self.cursorX = 0;
+                self.updateCursor();
             },
             else => return,
         }
     }
 
-    fn processWithModifiers(self: *TextBuffer, keys: *EnumSet(Key), controlActive: bool, altActive: bool) void {
+    fn processWithModifiers(self: *TextBuffer, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
         _ = self;
         _ = keys;
         _ = controlActive;
@@ -144,20 +156,20 @@ pub const TextBuffer = struct {
     fn newCharSet(self: *TextBuffer, set: *CharSet, code: u32) error{ CharNotFound, Max }!void {
         set.textureId = null;
 
-        if (self.charCount >= self.charMax) {
+        if (self.textureCount >= self.textureMax) {
             std.log.err("Max number of chars", .{});
 
             return error.Max;
         }
 
-        const index = self.charCount;
+        const index = self.textureCount;
 
         const char = try self.font.findChar(code);
 
         if (char.buffer) |b| {
-            self.charCount += 1;
-            self.texture.pushData(char.width, char.height, index, .red, .unsigned_byte, b);
+            self.textureCount += 1;
             set.textureId = index;
+            self.texture.pushData(char.width, char.height, index, .red, .unsigned_byte, b);
         }
 
         set.advance = @intCast(char.advance);
@@ -170,32 +182,37 @@ pub const TextBuffer = struct {
             return error.Max;
         }
 
-        const index = self.instanceCount;
-
         if (set.textureId) |id| {
-            const deltaX: f32 = @floatFromInt(set.bearing[0] * 2);
-            const deltaY: f32 = @floatFromInt((self.size - set.bearing[1]) * 2);
+            const deltaX: f32 = @floatFromInt(set.bearing[0]);
+            const deltaY: f32 = @floatFromInt((self.size - set.bearing[1]));
 
-            self.indexToInstances.pushData(index, &.{id});
-            self.instanceTransforms.pushData(index, &.{IDENTITY.translate(.{ self.cursorX + deltaX, self.cursorY - deltaY, 0 })});
+            const index = self.instanceCount;
+
+            self.textureIndices.pushData(index, &.{id});
             self.instanceCount += 1;
+            self.instances.pushData(index, &.{IDENTITY.translate(.{ self.cursorX + deltaX, self.cursorY - deltaY, 0 })});
         }
 
-        self.cursorX += @floatFromInt(set.advance >> 5);
+        self.cursorX += @floatFromInt(set.advance >> 6);
+        self.updateCursor();
     }
 
-    pub fn draw(self: *TextBuffer) void {
+    fn updateCursor(self: *TextBuffer) void {
+        self.instances.pushData(self.cursorIndex, &.{self.cursorTransform.translate(.{self.cursorX, self.cursorY, 0})});
+    }
+
+    pub fn drawChars(self: *TextBuffer) void {
         if (self.instanceCount == 0) return;
 
         self.texture.bind(self.textureLocation, 0);
-        self.instanceTransforms.bind(INSTANCE_MODEL_LOCATION);
-        self.indexToInstances.bind(INDEX_MODEL_LOCATION);
-        self.rectangle.draw(0, self.instanceCount);
+        self.rectangle.draw(1, self.instanceCount - 1);
+    }
+
+    pub fn drawCursors(self: *TextBuffer) void {
+        self.rectangle.draw(self.cursorIndex, 1);
     }
 
     pub fn deinit(self: *const TextBuffer) void {
-        self.instanceTransforms.deinit();
-        self.indexToInstances.deinit();
         self.texture.deinit();
         self.rectangle.deinit();
     }

@@ -15,6 +15,7 @@ layout(std430, binding = 1) readonly buffer modelIndex {
 layout (binding = 0) uniform Matrix {
     mat4 modelMatrix;
     mat4 viewMatrix;
+    mat4 scale;
     mat4 projectionMatrix;
 };
 
@@ -24,7 +25,7 @@ out Vertex {
 };
 
 void main() {
-    gl_Position = vec4(vPos , 1.0f) * modelMatrix * model[gl_InstanceID + gl_BaseInstance] * viewMatrix * projectionMatrix;
+    gl_Position = vec4(vPos, 1.0f) * modelMatrix * model[gl_InstanceID + gl_BaseInstance] * viewMatrix * scale * projectionMatrix;
 
     outTexture = vTexture;
     textureIndex = int(indices[gl_InstanceID + gl_BaseInstance]);
