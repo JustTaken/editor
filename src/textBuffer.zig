@@ -4,8 +4,6 @@ const lib = @import("root.zig");
 const math = @import("math.zig");
 const input = @import("input.zig");
 
-const FreeType = font.FreeType;
-const Char = font.Char;
 const Map = std.AutoArrayHashMap;
 const Allocator = std.mem.Allocator;
 const EnumSet = std.EnumSet;
@@ -13,6 +11,9 @@ const EnumSet = std.EnumSet;
 const Texture = lib.Texture;
 const Buffer = lib.Buffer;
 const Mesh = lib.Mesh;
+
+const FreeType = font.FreeType;
+const Char = font.Char;
 
 const Matrix = math.Matrix;
 
@@ -69,7 +70,6 @@ pub const TextBuffer = struct {
 
         self.instances = try instances.getSlice(instanceMax);
         self.textureIndices = try textureIndices.getSlice(instanceMax);
-        self.rectangle = try Mesh.new("assets/plane.obj", allocator);
 
         self.size = overSize;
         self.textureLocation = textureLocation;
@@ -83,6 +83,7 @@ pub const TextBuffer = struct {
         self.cursorIndex = 0;
         self.change = true;
 
+        self.rectangle = try Mesh.new("assets/plane.obj", allocator);
         self.font = try FreeType.new("assets/font.ttf", size);
         self.chars = Map(u32, CharSet).init(allocator);
         try self.chars.ensureTotalCapacity(textureMax * 2);

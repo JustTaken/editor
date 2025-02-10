@@ -17,8 +17,6 @@ pub const Xkbcommon = struct {
     listeners: [3]*anyopaque,
     listenerFns: [3]*const fn (*anyopaque, *const Keys, bool, bool) void,
     listenerCount: u32,
-    // listener: *anyopaque,
-    // hasListener: bool,
 
     activeCount: u32,
 
@@ -141,11 +139,7 @@ pub const Xkbcommon = struct {
 
                 self.keys.insert(key);
             },
-            .released => {
-                if (!self.keys.contains(key)) return;
-
-                self.keys.toggle(key);
-            },
+            .released => self.keys.toggle(key),
             _ => {},
         }
     }
