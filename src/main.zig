@@ -79,8 +79,18 @@ pub fn main() !void {
 
     window.input.newListener(&charWriter, TextBuffer.listen);
 
+    var frame: u32 = 0;
+
+    try window.commit();
     while (window.running) {
-        defer window.update();
+        window.getEvents() catch break;
+
+        const charHasChange = charWriter.hasChange();
+        const globalHasChange = global.hasChange();
+
+        if (!charHasChange and !globalHasChange) continue;
+
+        frame += 1;
 
         withTextureProgram.start();
         charWriter.drawChars();
@@ -89,6 +99,8 @@ pub fn main() !void {
         nonTextureProgram.start();
         charWriter.drawCursors();
         nonTextureProgram.end();
+
+        window.commit() catch break;
     }
 }
 
@@ -100,6 +112,8 @@ const Global = struct {
     instances: Buffer(Matrix(4)),
     textureIndices: Buffer(u32),
     uniform: Buffer(Matrix(4)),
+
+    change: bool,
 
     fn new(
         width: u32,
@@ -130,6 +144,8 @@ const Global = struct {
         self.instances.bind(0);
         self.textureIndices.bind(1);
 
+        self.change = true;
+
         return self;
     }
 
@@ -142,21 +158,25 @@ const Global = struct {
         if (keys.contains(.ArrowLeft)) {
             self.view = self.view.translate(.{ -VELOCITY, 0, 0 });
             self.uniform.pushData(1, &.{self.view});
+            self.change = true;
         }
 
         if (keys.contains(.ArrowRight)) {
             self.view = self.view.translate(.{ VELOCITY, 0, 0 });
             self.uniform.pushData(1, &.{self.view});
+            self.change = true;
         }
 
         if (keys.contains(.ArrowUp)) {
             self.view = self.view.translate(.{ 0, VELOCITY, 0 });
             self.uniform.pushData(1, &.{self.view});
+            self.change = true;
         }
 
         if (keys.contains(.ArrowDown)) {
             self.view = self.view.translate(.{ 0, -VELOCITY, 0 });
             self.uniform.pushData(1, &.{self.view});
+            self.change = true;
         }
     }
 
@@ -169,6 +189,13 @@ const Global = struct {
                 IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), NEAR, FAR),
             },
         );
+
+        self.change = true;
+    }
+
+    fn hasChange(self: *Global) bool {
+        defer self.change = false;
+        return self.change;
     }
 
     fn deinit(self: *const Global) void {

@@ -9,12 +9,12 @@ pub fn Buffer(comptime T: type) type {
 
         const Self = @This();
 
-        pub const Manager = struct {
+        pub const Slice = struct {
             handle: *Self,
             offset: u32,
             count: u32,
 
-            pub fn pushData(self: *Manager, offset: u32, data: []const T) void {
+            pub fn pushData(self: *Slice, offset: u32, data: []const T) void {
                 Self.pushData(self.handle, self.offset + offset, data);
             }
         };
@@ -35,7 +35,7 @@ pub fn Buffer(comptime T: type) type {
             return self;
         }
 
-        pub fn getSlice(self: *Self, count: u32) error{OutOfMemory}!Manager {
+        pub fn getSlice(self: *Self, count: u32) error{OutOfMemory}!Slice {
             if (self.count + count > self.size) return error.OutOfMemory;
             defer self.size += count;
 

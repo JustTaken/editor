@@ -68,7 +68,7 @@ pub const Xkbcommon = struct {
     }
 
     pub fn tick(self: *Xkbcommon) void {
-        if (self.activeCount == 0) return;
+        if (self.keys.count() == 0) return;
         const time = std.time.milliTimestamp();
 
         if (!self.repeating) {
@@ -140,15 +140,11 @@ pub const Xkbcommon = struct {
                 self.resetRepeat();
 
                 self.keys.insert(key);
-
-                self.activeCount += 1;
             },
             .released => {
                 if (!self.keys.contains(key)) return;
 
                 self.keys.toggle(key);
-
-                self.activeCount -= 1;
             },
             _ => {},
         }

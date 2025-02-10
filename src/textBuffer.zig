@@ -27,10 +27,9 @@ pub const TextBuffer = struct {
     chars: Map(u32, CharSet),
     rectangle: Mesh,
 
-    instances: Buffer(Matrix(4)).Manager,
-    textureIndices: Buffer(u32).Manager,
+    instances: Buffer(Matrix(4)).Slice,
+    textureIndices: Buffer(u32).Slice,
     texture: Texture,
-
 
     instanceCount: u32,
     instanceMax: u32,
@@ -45,6 +44,8 @@ pub const TextBuffer = struct {
     textureCount: u16,
     textureMax: u32,
     size: u16,
+
+    change: bool,
 
     const CharSet = struct {
         textureId: ?u16,
@@ -80,6 +81,7 @@ pub const TextBuffer = struct {
         self.instanceCount = 0;
         self.textureCount = 0;
         self.cursorIndex = 0;
+        self.change = true;
 
         self.font = try FreeType.new("assets/font.ttf", size);
         self.chars = Map(u32, CharSet).init(allocator);
@@ -198,6 +200,7 @@ pub const TextBuffer = struct {
     }
 
     fn updateCursor(self: *TextBuffer) void {
+        self.change = true;
         self.instances.pushData(self.cursorIndex, &.{self.cursorTransform.translate(.{self.cursorX, self.cursorY, 0})});
     }
 
@@ -210,6 +213,11 @@ pub const TextBuffer = struct {
 
     pub fn drawCursors(self: *TextBuffer) void {
         self.rectangle.draw(self.cursorIndex, 1);
+    }
+
+    pub fn hasChange(self: *TextBuffer) bool {
+        defer self.change = false;
+        return self.change;
     }
 
     pub fn deinit(self: *const TextBuffer) void {

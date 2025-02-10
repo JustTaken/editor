@@ -153,6 +153,8 @@ pub const OpenGL = struct {
 
         gl.viewport(0, 0, self.width, self.height);
         gl.scissor(0, 0, self.width, self.height);
+
+        self.render() catch @panic("TODO");
     }
 
     pub fn deinit(self: *OpenGL) void {

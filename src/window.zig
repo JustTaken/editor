@@ -38,14 +38,13 @@ pub const Window = struct {
         self.running = true;
     }
 
-    pub fn update(self: *Window) void {
-        self.renderer.render() catch {
-            self.running = false;
-        };
+    pub fn commit(self: *Window) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
+        try self.renderer.render();
+        self.display.surface.commit();
+    }
 
-        self.display.update() catch {
-            self.running = false;
-        };
+    pub fn getEvents(self: *Window) error{Fail}!void {
+        if (self.display.display.roundtrip() != .SUCCESS) return error.Fail;
 
         self.input.tick();
 
@@ -59,6 +58,6 @@ pub const Window = struct {
     }
 };
 
-fn sleep(ms: u32) void {
+pub fn sleep(ms: u32) void {
     std.time.sleep(ms * std.time.ns_per_ms);
 }
