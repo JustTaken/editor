@@ -9,7 +9,11 @@ layout(std430, binding = 0) readonly buffer instanceModel {
 };
 
 layout(std430, binding = 1) readonly buffer modelIndex {
-    uint indices[];
+    uvec2 indices[];
+};
+
+layout(std430, binding = 2) readonly buffer charModel {
+    mat4 charTransform[];
 };
 
 layout (binding = 0) uniform Matrix {
@@ -25,8 +29,9 @@ out Vertex {
 };
 
 void main() {
-    gl_Position = vec4(vPos, 1.0f) * modelMatrix * model[gl_InstanceID + gl_BaseInstance] * viewMatrix * scale * projectionMatrix;
+    uvec2 indice = indices[gl_InstanceID + gl_BaseInstance];
+    gl_Position = vec4(vPos, 1.0f) * modelMatrix * charTransform[indice[1]] * model[indice[0]] * viewMatrix * scale * projectionMatrix;
 
     outTexture = vTexture;
-    textureIndex = int(indices[gl_InstanceID + gl_BaseInstance]);
+    textureIndex = int(indice[1]);
 }

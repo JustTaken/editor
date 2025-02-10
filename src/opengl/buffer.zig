@@ -10,12 +10,12 @@ pub fn Buffer(comptime T: type) type {
         const Self = @This();
 
         pub const Slice = struct {
-            handle: *Self,
+            handle: gl.Buffer,
             offset: u32,
             count: u32,
 
             pub fn pushData(self: *Slice, offset: u32, data: []const T) void {
-                Self.pushData(self.handle, self.offset + offset, data);
+                gl.namedBufferSubData(self.handle, offset * @sizeOf(T), T, data);
             }
         };
 
@@ -40,7 +40,7 @@ pub fn Buffer(comptime T: type) type {
             defer self.size += count;
 
             return .{
-                .handle = self,
+                .handle = self.handle,
                 .offset = self.count,
                 .count = count,
             };

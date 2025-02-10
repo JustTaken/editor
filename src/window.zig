@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const renderer = @import("opengl/root.zig");
-const display = @import("wayland/root.zig");
+const display = @import("wayland.zig");
 const input = @import("input.zig");
 
 const Input = input.Xkbcommon;

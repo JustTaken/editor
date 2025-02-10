@@ -3,7 +3,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 
-const Window = @import("../window.zig").Window;
+const Window = @import("window.zig").Window;
 
 pub const Wayland = struct {
     window: *Window,

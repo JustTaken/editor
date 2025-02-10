@@ -4,8 +4,11 @@ const xkb = @cImport({
     @cInclude("xkbcommon/xkbcommon.h");
 });
 
+
 const EVDEV_SCANCODE_OFFSET: u32 = 8;
+
 const Keys = std.EnumSet(Key);
+const Mutex = std.Thread.Mutex;
 
 pub const Xkbcommon = struct {
     context: *xkb.xkb_context,
@@ -139,7 +142,7 @@ pub const Xkbcommon = struct {
 
                 self.keys.insert(key);
             },
-            .released => self.keys.toggle(key),
+            .released => self.keys.remove(key),
             _ => {},
         }
     }
