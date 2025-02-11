@@ -21,8 +21,6 @@ pub const Xkbcommon = struct {
     listenerFns: [3]*const fn (*anyopaque, *const Keys, bool, bool) void,
     listenerCount: u32,
 
-    activeCount: u32,
-
     controlIndex: u32,
     altIndex: u32,
 
@@ -33,6 +31,8 @@ pub const Xkbcommon = struct {
     repeating: bool,
     working: bool,
 
+    initialized: bool,
+
     pub fn new() Xkbcommon {
         var self: Xkbcommon = undefined;
 
@@ -40,7 +40,7 @@ pub const Xkbcommon = struct {
         self.repeatInfo(20, 200);
         self.repeating = false;
         self.working = false;
-        self.activeCount = 0;
+        self.initialized = false;
         self.listenerCount = 0;
 
         return self;
@@ -54,6 +54,7 @@ pub const Xkbcommon = struct {
         self.altIndex = xkb.xkb_keymap_mod_get_index(self.keymap, xkb.XKB_MOD_NAME_ALT);
 
         self.time = std.time.milliTimestamp();
+        self.initialized = true;
     }
 
     fn resetRepeat(self: *Xkbcommon) void {
@@ -148,13 +149,14 @@ pub const Xkbcommon = struct {
     }
 
     pub fn deinit(self: *const Xkbcommon) void {
+        if (!self.initialized) return;
+
         xkb.xkb_state_unref(self.state);
         xkb.xkb_keymap_unref(self.keymap);
         xkb.xkb_context_unref(self.context);
     }
 };
 
-pub const NO_DISPLAY_START: u32 = 65000;
 
 pub const Key = enum(u32) {
     Space = 32,
@@ -289,4 +291,6 @@ pub const Key = enum(u32) {
     AltL = 65513,
 
     SuperL = 65515,
+
+    pub const NON_DISPLAYABLE: u32 = 65000;
 };
