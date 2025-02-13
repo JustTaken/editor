@@ -21,6 +21,7 @@ pkgs.mkShell {
     freetype
     gdb
     renderdoc
+    emacs30-pgtk
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib:${pkgs.freetype}/lib";

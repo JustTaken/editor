@@ -13,11 +13,11 @@ const SIZE: u16 = 16;
 const SCALE: f32 = 1.5;
 
 const CHAR_COUNT: u32 = 64;
-const GLYPH_MAX: u32 = 1024 * 3;
+const GLYPH_MAX: u32 = 1024 * 4;
 const INSTANCE_MAX: u32 = GLYPH_MAX + 1;
 
 pub fn main() !void {
-    const buffer = try std.heap.page_allocator.alloc(u8, 8 * std.mem.page_size);
+    const buffer = try std.heap.page_allocator.alloc(u8, 16 * std.mem.page_size);
     defer std.heap.page_allocator.free(buffer);
 
     var fixedAllocator = FixedBufferAllocator.init(buffer);
@@ -46,11 +46,15 @@ pub fn main() !void {
     window.input.newListener(&painter, Painter.keyListen);
 
     try window.commit();
+
+    var frame: u32 = 0;
     while (window.running) {
         window.getEvents() catch break;
 
         if (!painter.hasChange()) continue;
 
+        frame += 1;
+        std.log.info("Drawing: {}", .{frame});
         painter.draw();
 
         window.commit() catch break;

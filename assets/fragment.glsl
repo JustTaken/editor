@@ -12,4 +12,5 @@ in Vertex {
 void main() {
     vec4 tex = texture(textureSampler1, vec3(outTexture, textureIndex));
     color = vec4(1.0, 1.0, 1.0, tex.r);
+    // color = vec4(tex.r, 1.0, 1.0, 1.0);
 }

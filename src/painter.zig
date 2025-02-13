@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const EnumSet = std.EnumSet;
 const Map = std.AutoArrayHashMap;
 const ArrayList = std.ArrayList;
+const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const Program = @import("opengl/shader.zig").Program;
 const Shader = @import("opengl/shader.zig").Shader;
@@ -20,17 +21,25 @@ const Char = @import("font.zig").Char;
 
 const IDENTITY = Matrix(4).identity();
 
-const VELOCITY: f32 = 10.0;
+const VELOCITY: f32 = 3.0;
 
 pub const Painter = struct {
-    indices: Buffer([2]u32),
-    instances: Buffer(Matrix(4)),
-    uniform: Buffer(Matrix(4)),
+    instanceTransforms: Buffer([2]f32),
+    instanceTransformIndices: Buffer(u32),
+
+    charTransforms: Buffer([2]f32),
+    charTransformIndices: Buffer(u32),
+
     programTexture: Program,
     programNoTexture: Program,
 
-    matrices: [N]Matrix(4),
-    changes: [N]bool,
+    matrixUniforms: Buffer(Matrix(4)),
+    matrixUniformArray: [2]Matrix(4),
+
+    scaleUniforms: Buffer(f32),
+    scaleUniformArray: [2]f32,
+
+    changes: [2]bool,
 
     text: TextPainter,
 
@@ -39,8 +48,6 @@ pub const Painter = struct {
 
     near: f32,
     far: f32,
-
-    const N: u32 = 4;
 
     const Config = struct {
         width: u32,
@@ -79,24 +86,26 @@ pub const Painter = struct {
 
         const textureLocation = try self.programTexture.uniformLocation("textureSampler1");
 
-        self.instances = Buffer(Matrix(4)).new(.shader_storage_buffer, config.instanceMax, null);
-        self.indices = Buffer([2]u32).new(.shader_storage_buffer, config.instanceMax, null);
+        self.instanceTransforms = Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null);
+        self.instanceTransformIndices = Buffer(u32).new(.shader_storage_buffer, config.instanceMax, null);
+        self.charTransforms = Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null);
+        self.charTransformIndices = Buffer(u32).new(.shader_storage_buffer, config.instanceMax, null);
 
-        const fsize: f32 = @floatFromInt(config.size / 2);
+        self.scaleUniformArray[0] = @floatFromInt(config.size / 2);
+        self.scaleUniformArray[1] = config.scale;
+        self.scaleUniforms = Buffer(f32).new(.uniform_buffer, 2, &self.scaleUniformArray);
 
-        self.matrices = .{
-            IDENTITY.scale(.{ fsize, fsize, 1, 1 }),
-            IDENTITY.translate(.{ fsize, -fsize, -1 }),
-            IDENTITY.scale(.{ config.scale, config.scale, 1, 1 }),
-            IDENTITY.ortographic(0, @floatFromInt(config.width), 0, @floatFromInt(config.height), config.near, config.far),
-        };
+        self.matrixUniformArray = .{ IDENTITY.translate(.{self.scaleUniformArray[0], -self.scaleUniformArray[0], -1}), IDENTITY.ortographic(0, @floatFromInt(config.width), 0, @floatFromInt(config.height), config.near, config.far) };
+        self.matrixUniforms = Buffer(Matrix(4)).new(.uniform_buffer, 2, &self.matrixUniformArray);
+        self.changes = .{false} ** 2;
 
-        self.uniform = Buffer(Matrix(4)).new(.uniform_buffer, N, &self.matrices);
-        self.changes = .{false} ** N;
+        self.matrixUniforms.bind(0);
+        self.scaleUniforms.bind(2);
 
-        self.uniform.bind(0);
-        self.instances.bind(0);
-        self.indices.bind(1);
+        self.instanceTransforms.bind(0);
+        self.instanceTransformIndices.bind(1);
+        self.charTransforms.bind(2);
+        self.charTransformIndices.bind(3);
 
         self.text = try TextPainter.new(
             config.size,
@@ -106,8 +115,10 @@ pub const Painter = struct {
             config.glyphMax,
             config.charKindMax,
             textureLocation,
-            &self.instances,
-            &self.indices,
+            &self.instanceTransforms,
+            &self.instanceTransformIndices,
+            &self.charTransforms,
+            &self.charTransformIndices,
             config.allocator,
         );
 
@@ -118,23 +129,23 @@ pub const Painter = struct {
         const self: *Painter = @ptrCast(@alignCast(ptr));
 
         if (keys.contains(.ArrowLeft)) {
-            self.matrices[1] = self.matrices[1].translate(.{ -VELOCITY, 0, 0 });
-            self.changes[1] = true;
+            self.matrixUniformArray[0] = self.matrixUniformArray[0].translate(.{ -VELOCITY, 0, 0 });
+            self.changes[0] = true;
         }
 
         if (keys.contains(.ArrowRight)) {
-            self.matrices[1] = self.matrices[1].translate(.{ VELOCITY, 0, 0 });
-            self.changes[1] = true;
+            self.matrixUniformArray[0] = self.matrixUniformArray[0].translate(.{ VELOCITY, 0, 0 });
+            self.changes[0] = true;
         }
 
         if (keys.contains(.ArrowUp)) {
-            self.matrices[1] = self.matrices[1].translate(.{ 0, VELOCITY, 0 });
-            self.changes[1] = true;
+            self.matrixUniformArray[0] = self.matrixUniformArray[0].translate(.{ 0, VELOCITY, 0 });
+            self.changes[0] = true;
         }
 
         if (keys.contains(.ArrowDown)) {
-            self.matrices[1] = self.matrices[1].translate(.{ 0, -VELOCITY, 0 });
-            self.changes[1] = true;
+            self.matrixUniformArray[0] = self.matrixUniformArray[0].translate(.{ 0, -VELOCITY, 0 });
+            self.changes[0] = true;
         }
 
         self.text.listen(keys, controlActive, altActive);
@@ -147,10 +158,10 @@ pub const Painter = struct {
         self.width = width;
         self.height = height;
 
-        self.matrices[3] = IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), self.near, self.far);
-        self.changes[3] = true;
+        self.matrixUniformArray[1] = IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), self.near, self.far);
+        self.changes[1] = true;
 
-        self.text.resize(width, height);
+        self.text.resize(width, height) catch @panic("Failed to resize");
     }
 
     pub fn hasChange(self: *Painter) bool {
@@ -158,11 +169,11 @@ pub const Painter = struct {
         var start: u32 = 0;
         var count: u32 = 0;
 
-        while (start + count < self.matrices.len) {
+        while (start + count < self.matrixUniformArray.len) {
             if (!self.changes[start + count]) {
                 if (count > 0) {
                     flag = true;
-                    self.uniform.pushData(@intCast(start), self.matrices[start .. start + count]);
+                    self.matrixUniforms.pushData(@intCast(start), self.matrixUniformArray[start .. start + count]);
                 }
 
                 start += count + 1;
@@ -176,7 +187,7 @@ pub const Painter = struct {
         }
 
         if (count > 0) {
-            self.uniform.pushData(@intCast(start), self.matrices[start .. start + count]);
+            self.matrixUniforms.pushData(@intCast(start), self.matrixUniformArray[start .. start + count]);
         }
 
         return self.text.hasChange() or flag or count > 0;
@@ -187,19 +198,87 @@ pub const Painter = struct {
         self.text.drawChars();
         self.programTexture.end();
 
-        self.programNoTexture.start();
-        self.text.drawCursors();
-        self.programNoTexture.end();
-        
+        // self.programNoTexture.start();
+        // self.text.drawCursors();
+        // self.programNoTexture.end();
     }
 
     pub fn deinit(self: *const Painter) void {
         self.text.deinit();
-        self.indices.deinit();
-        self.instances.deinit();
-        self.uniform.deinit();
+        self.instanceTransformIndices.deinit();
+        self.instanceTransforms.deinit();
+        self.matrixUniforms.deinit();
+        self.scaleUniforms.deinit();
+        self.charTransforms.deinit();
+        self.charTransformIndices.deinit();
         self.programTexture.deinit();
         self.programNoTexture.deinit();
+    }
+};
+
+const Lines = struct {
+    cursorX: u32,
+    cursorY: u32,
+    cursorOffset: u32,
+
+    buffer: ArrayList(u8),
+    // buffer: []u8,
+    // newChars: []u8,
+
+    // additions: []Add,
+    // removes: []Remove,
+    // rows: ArrayList(Row),
+
+    // allocator: FixedBufferAllocator,
+
+    // const Add = struct {
+    //     lineOffset: u16,
+    //     charOffset: u16,
+    //     len: u16,
+    // };
+
+    // const Remove = struct {
+    //     lineOffset: u16,
+    //     len: u16,
+    // };
+
+    // const Row = struct {
+    //     offset: u16,
+    //     additionPos: u16,
+    //     additionLen: u16,
+    //     removePos: u16,
+    //     removeLen: u16,
+
+        // fn new(allocator: Allocator) error{OutOfMemory}!Row {
+        //     return .{
+        //         .offset = @intCast(offset),
+        //         .additionPos = 0,
+        //         .additionLen = 0,
+        //         .removePos = 0,
+        //         .removeLen = 0,
+        //     };
+        // }
+    // };
+
+    fn new(allocator: Allocator) error{OutOfMemory}!Lines {
+        var self: Lines = undefined;
+
+        self.cursorX = 0;
+        self.cursorY = 0;
+        self.cursorOffset = 0;
+
+        self.buffer = try ArrayList(u8).initCapacity(allocator, 100);
+
+        return self;
+
+    }
+
+    fn insertChar(self: *Lines, char: u8) error{OutOfMemory}!void {
+        if (self.cursorY > self.rows.items.len) return error.OutOfMemory;
+        if (self.cursorX >= 50) return error.OutOfMemory;
+        if (self.cursorY == self.rows.items.len) try self.rows.append(self.allocator.alloc(u8, 50));
+
+        self.rows.items[self.cursorOffset] = char;
     }
 };
 
@@ -208,12 +287,15 @@ const TextPainter = struct {
     chars: Map(u32, CharSet),
     rectangle: Mesh,
 
-    charTransforms: Buffer(Matrix(4)),
-    instances: Buffer(Matrix(4)).Slice,
-    indices: Buffer([2]u32).Slice,
+    instanceTransforms: Buffer([2]f32).Slice,
+    instanceTransformIndices: Buffer(u32).Slice,
+    instanceTransformIndicesArray: []u32,
+
+    charTransforms: Buffer([2]f32).Slice,
+    charTransformIndices: Buffer(u32).Slice,
+    charTransformIndicesArray: []u32,
 
     indiceChanges: ArrayList(Change),
-    indiceArray: [][2]u32,
 
     texture: Texture,
     textureCount: u16,
@@ -254,8 +336,10 @@ const TextPainter = struct {
         instanceMax: u32,
         textureMax: u32,
         textureLocation: u32,
-        instances: *Buffer(Matrix(4)),
-        indices: *Buffer([2]u32),
+        instanceTransforms: *Buffer([2]f32),
+        instanceTransformIndices: *Buffer(u32),
+        charTransforms: *Buffer([2]f32),
+        charTransformIndices: *Buffer(u32),
         allocator: Allocator,
     ) error{ Init, Read, OutOfMemory }!TextPainter {
         var self: TextPainter = undefined;
@@ -263,22 +347,27 @@ const TextPainter = struct {
         self.scale = scale;
 
         const overSize = size + 2;
+
+        self.instanceTransforms = try instanceTransforms.getSlice(instanceMax);
+        self.instanceTransformIndices = try instanceTransformIndices.getSlice(instanceMax);
+        self.instanceTransformIndicesArray = try allocator.alloc(u32, instanceMax);
+        @memset(self.instanceTransformIndicesArray, 0);
+
+        self.charTransforms = try charTransforms.getSlice(textureMax);
+        self.charTransformIndices = try charTransformIndices.getSlice(instanceMax);
+        self.charTransformIndicesArray = try allocator.alloc(u32, instanceMax);
+        @memset(self.charTransformIndicesArray, 0);
+
         self.texture = Texture.new(overSize, overSize, textureMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
-        self.charTransforms = Buffer(Matrix(4)).new(.shader_storage_buffer, textureMax + 1, null);
-        self.charTransforms.bind(2);
 
-        self.resize(width, height);
-
-        self.instances = try instances.getSlice(instanceMax);
-        self.indices = try indices.getSlice(instanceMax);
-
-        self.indiceChanges = try ArrayList(Change).initCapacity(allocator, 5);
-        self.indiceArray = try allocator.alloc([2]u32, instanceMax);
+        self.indiceChanges = try ArrayList(Change).initCapacity(allocator, 10);
 
         self.textureSize = @intCast(overSize);
         self.textureLocation = textureLocation;
         self.instanceMax = instanceMax;
         self.textureMax = textureMax;
+
+        try self.resize(width, height);
 
         self.cursorX = 0;
         self.cursorY = 0;
@@ -370,7 +459,7 @@ const TextPainter = struct {
             const deltaX: f32 = @floatFromInt(set.bearing[0]);
             const deltaY: f32 = @floatFromInt((self.textureSize - set.bearing[1]));
 
-            self.charTransforms.pushData(self.textureCount, &.{IDENTITY.translate(.{ deltaX, -deltaY, 0 })});
+            self.charTransforms.pushData(self.textureCount, &.{.{ deltaX, -deltaY }});
         }
     }
 
@@ -381,15 +470,18 @@ const TextPainter = struct {
         }
 
         if (set.textureId) |id| try self.appendChange(self.instanceCount, self.cursorX, self.cursorY, id);
+
         self.instanceCount += 1;
         self.cursorX += 1;
+
         try self.updateCursor();
     }
 
     fn appendChange(self: *TextPainter, indice: u32, x: u32, y: u32, textureId: u32) error{OutOfMemory}!void {
         const offset = self.offsetOf(x, y);
 
-        self.indiceArray[indice] = .{ offset, textureId };
+        self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
+        self.charTransformIndicesArray[indice / 4] |= textureId << @as(u5, @intCast(8 * (indice % 4)));
 
         if (self.indiceChanges.items.len > 0) {
             const change = &self.indiceChanges.items[self.indiceChanges.items.len - 1];
@@ -408,34 +500,35 @@ const TextPainter = struct {
     }
 
     fn initCursor(self: *TextPainter) error{OutOfMemory}!void {
-        defer self.instanceCount += 1;
+        _ = self;
+        // defer self.instanceCount += 1;
 
-        const heightScale = @as(f32, @floatFromInt(self.font.height)) / @as(f32, @floatFromInt(self.textureSize));
-        const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
+        // const heightScale = @as(f32, @floatFromInt(self.font.height)) / @as(f32, @floatFromInt(self.textureSize));
+        // const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
 
-        self.charTransforms.pushData(self.textureMax, &.{IDENTITY.scale(.{
-            widthScale,
-            heightScale,
-            1,
-            1,
-        }).translate(.{
-            -@as(f32, @floatFromInt(self.font.width)) / 2.0,
-            0,
-            0,
-        })});
+        // self.charTransforms.pushData(self.textureMax, &.{IDENTITY.scale(.{
+        //     widthScale,
+        //     heightScale,
+        //     1,
+        //     1,
+        // }).translate(.{
+        //     -@as(f32, @floatFromInt(self.font.width)) / 2.0,
+        //     0,
+        //     0,
+        // })});
 
-        try self.updateCursor();
+        // try self.updateCursor();
     }
 
     fn updateCursor(self: *TextPainter) error{OutOfMemory}!void {
-        const cursorExcededRight = self.cursorX > self.rowChars;
-        const cursorExcededBottom = self.cursorY > self.rowChars;
+        _ = self;
+        // const cursorExcededRight = self.cursorX > self.rowChars;
+        // const cursorExcededBottom = self.cursorY > self.rowChars;
 
-        if (cursorExcededRight) {}
+        // if (cursorExcededRight) {}
+        // if (cursorExcededBottom) {}
 
-        if (cursorExcededBottom) {}
-
-        try self.appendChange(0, self.cursorX, self.cursorY, self.textureMax);
+        // try self.appendChange(0, self.cursorX, self.cursorY, self.textureMax);
     }
 
     fn offsetOf(self: *TextPainter, x: usize, y: usize) u32 {
@@ -446,21 +539,25 @@ const TextPainter = struct {
         if (self.instanceCount == 0) return;
 
         self.texture.bind(self.textureLocation, 0);
-        self.rectangle.draw(1, self.instanceCount - 1);
+        self.rectangle.draw(0, self.instanceCount);
     }
 
     pub fn drawCursors(self: *TextPainter) void {
         self.rectangle.draw(0, 1);
     }
 
-    fn resize(self: *TextPainter, width: u32, height: u32) void {
+    fn resize(self: *TextPainter, width: u32, height: u32) error{OutOfMemory}!void {
         const rowChars: f32 = @floatFromInt(width / self.font.width);
         const colChars: f32 = @floatFromInt(height / self.font.height);
 
         self.rowChars = @intFromFloat(rowChars / self.scale);
         self.colChars = @intFromFloat(colChars / self.scale);
 
-        if (self.rowChars * self.colChars > self.instanceMax) @panic("Increase the maximum number of instances");
+        if (self.rowChars * self.colChars > self.instanceMax) {
+            std.log.err("Failed to resize text window, required glyph slot count: {}, given: {}", .{self.rowChars * self.colChars, self.instanceMax});
+
+            return error.OutOfMemory;
+        }
 
         for (0..self.rowChars) |j| {
             for (0..self.colChars) |i| {
@@ -469,7 +566,7 @@ const TextPainter = struct {
                 const xPos: f32 = @floatFromInt(self.font.width * j);
                 const yPos: f32 = @floatFromInt(self.font.height * i);
 
-                self.instances.pushData(@intCast(offset), &.{IDENTITY.translate(.{ xPos, -yPos, 0 })});
+                self.instanceTransforms.pushData(@intCast(offset), &.{.{ xPos, -yPos }});
             }
         }
 
@@ -481,7 +578,14 @@ const TextPainter = struct {
         defer self.indiceChanges.clearRetainingCapacity();
 
         for (self.indiceChanges.items) |change| {
-            self.indices.pushData(change.offset, self.indiceArray[change.offset..change.offset + change.count]);
+            const instanceTransformOffset = change.offset / 2;
+            const instanceTransformCount = change.count / 2;
+
+            const charTransformOffset = change.offset / 4;
+            const charTransformCount = change.count / 4;
+
+            self.instanceTransformIndices.pushData(instanceTransformOffset, self.instanceTransformIndicesArray[instanceTransformOffset..instanceTransformOffset + instanceTransformCount + 1]);
+            self.charTransformIndices.pushData(charTransformOffset, self.charTransformIndicesArray[charTransformOffset..charTransformOffset + charTransformCount + 1]);
         }
 
         return self.indiceChanges.items.len > 0;
