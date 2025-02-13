@@ -11,12 +11,12 @@ layout(std430, binding = 1) readonly buffer InstanceTransformIndex {
     uint instanceTransformIndices[];
 };
 
-layout(std430, binding = 2) readonly buffer CharTransform {
-    vec2 charTransforms[];
+layout(std430, binding = 2) readonly buffer InstanceScale {
+    mat4 instanceScale[];
 };
 
-layout(std430, binding = 3) readonly buffer CharTransformIndex {
-    uint charTransformIndices[]; // TODO: For now this array does not uses index 0, because it is indexed by the same variable as instanceTransformIndices and instanceScaleIndices. The variable in the second shader "rawVertex.glsl" the instanceScaleIndices comes first and for now uses index 0;
+layout(std430, binding = 3) readonly buffer InstanceScaleIndex {
+    uint instanceScaleIndices[];
 };
 
 layout (binding = 2) uniform Scale {
@@ -37,23 +37,22 @@ out Vertex {
 void main() {
     int instanceId = gl_InstanceID + gl_BaseInstance;
     int instanceIndice = int(int(instanceTransformIndices[instanceId / 2]) >> (16 * (instanceId % 2))) & 0xFFFF;
-    int textureIndice = int(int(charTransformIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
+    int scaleIndice = int(int(instanceScaleIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
 
     mat4 transform = mat4(1.0);
-    transform[0][3] = instanceTransforms[instanceIndice].x + charTransforms[textureIndice].x;
-    transform[1][3] = instanceTransforms[instanceIndice].y + charTransforms[textureIndice].y;
+    transform[0][3] = instanceTransforms[instanceIndice].x;
+    transform[1][3] = instanceTransforms[instanceIndice].y;
 
     mat4 model = mat4(1.0);
     model[0][0] = worldScale;
     model[1][1] = worldScale;
-    model = model * transform;
+    model = model * instanceScale[scaleIndice] * transform;
 
     mat4 scale = mat4(1.0);
     scale[0][0] = screenScale;
     scale[1][1] = screenScale;
 
-    gl_Position = vec4(vPos,1.0) * model * viewMatrix * scale * projectionMatrix;
+    gl_Position = vec4(vPos, 1.0) * model * viewMatrix * scale * projectionMatrix;
 
     outTexture = vTexture;
-    textureIndex = textureIndice;
 }

@@ -30,8 +30,6 @@ pub const Mesh = struct {
     ) error{ OutOfMemory, Read }!Mesh {
         var self: Mesh = undefined;
 
-        const fields = @typeInfo(Vertex).Struct.fields;
-
         const allocationBuffer = try allocator.alloc(u8, std.mem.page_size);
         var fixedAllocator = FixedBufferAllocator.init(allocationBuffer);
 
@@ -62,6 +60,9 @@ pub const Mesh = struct {
 
         self.array = gl.genVertexArray();
         gl.bindVertexArray(self.array);
+
+        const fields = @typeInfo(Vertex).Struct.fields;
+
         gl.bindBuffer(self.index, .element_array_buffer);
         gl.bindBuffer(self.vertex, .array_buffer);
 

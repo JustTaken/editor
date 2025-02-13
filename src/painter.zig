@@ -11,6 +11,7 @@ const Shader = @import("opengl/shader.zig").Shader;
 const Texture = @import("opengl/texture.zig").Texture;
 const Buffer = @import("opengl/buffer.zig").Buffer;
 const Mesh = @import("opengl/mesh.zig").Mesh;
+const State = @import("opengl/mesh.zig").State;
 
 const Matrix = @import("math.zig").Matrix;
 
@@ -30,6 +31,9 @@ pub const Painter = struct {
     charTransforms: Buffer([2]f32),
     charTransformIndices: Buffer(u32),
 
+    solidTransforms: Buffer(Matrix(4)),
+    solidTransformIndices: Buffer(u32),
+
     programTexture: Program,
     programNoTexture: Program,
 
@@ -37,7 +41,7 @@ pub const Painter = struct {
     matrixUniformArray: [2]Matrix(4),
 
     scaleUniforms: Buffer(f32),
-    scaleUniformArray: [2]f32,
+    scaleUniformArray: [3]f32,
 
     changes: [2]bool,
 
@@ -74,22 +78,27 @@ pub const Painter = struct {
         const fragmentShader = try Shader.fromPath(.fragment, "assets/fragment.glsl", config.allocator);
 
         self.programTexture = try Program.new(vertexShader, fragmentShader, config.allocator);
-
-        fragmentShader.deinit();
-
-        const rawFragmentShader = try Shader.fromPath(.fragment, "assets/rawFrag.glsl", config.allocator);
-
-        self.programNoTexture = try Program.new(vertexShader, rawFragmentShader, config.allocator);
+        const textureLocation = try self.programTexture.uniformLocation("textureSampler1");
 
         vertexShader.deinit();
-        rawFragmentShader.deinit();
+        fragmentShader.deinit();
 
-        const textureLocation = try self.programTexture.uniformLocation("textureSampler1");
+        const rawVertexShader = try Shader.fromPath(.vertex, "assets/rawVertex.glsl", config.allocator);
+        const rawFragmentShader = try Shader.fromPath(.fragment, "assets/rawFrag.glsl", config.allocator);
+
+        self.programNoTexture = try Program.new(rawVertexShader, rawFragmentShader, config.allocator);
+
+        rawVertexShader.deinit();
+        rawFragmentShader.deinit();
 
         self.instanceTransforms = Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null);
         self.instanceTransformIndices = Buffer(u32).new(.shader_storage_buffer, config.instanceMax, null);
+
         self.charTransforms = Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null);
         self.charTransformIndices = Buffer(u32).new(.shader_storage_buffer, config.instanceMax, null);
+
+        self.solidTransforms = Buffer(Matrix(4)).new(.shader_storage_buffer, 1, null);
+        self.solidTransformIndices = Buffer(u32).new(.shader_storage_buffer, 1, null);
 
         self.scaleUniformArray[0] = @floatFromInt(config.size / 2);
         self.scaleUniformArray[1] = config.scale;
@@ -101,11 +110,6 @@ pub const Painter = struct {
 
         self.matrixUniforms.bind(0);
         self.scaleUniforms.bind(2);
-
-        self.instanceTransforms.bind(0);
-        self.instanceTransformIndices.bind(1);
-        self.charTransforms.bind(2);
-        self.charTransformIndices.bind(3);
 
         self.text = try TextPainter.new(
             config.size,
@@ -119,6 +123,8 @@ pub const Painter = struct {
             &self.instanceTransformIndices,
             &self.charTransforms,
             &self.charTransformIndices,
+            &self.solidTransforms,
+            &self.solidTransformIndices,
             config.allocator,
         );
 
@@ -198,9 +204,9 @@ pub const Painter = struct {
         self.text.drawChars();
         self.programTexture.end();
 
-        // self.programNoTexture.start();
-        // self.text.drawCursors();
-        // self.programNoTexture.end();
+        self.programNoTexture.start();
+        self.text.drawCursors();
+        self.programNoTexture.end();
     }
 
     pub fn deinit(self: *const Painter) void {
@@ -211,6 +217,8 @@ pub const Painter = struct {
         self.scaleUniforms.deinit();
         self.charTransforms.deinit();
         self.charTransformIndices.deinit();
+        self.solidTransforms.deinit();
+        self.solidTransformIndices.deinit();
         self.programTexture.deinit();
         self.programNoTexture.deinit();
     }
@@ -295,7 +303,12 @@ const TextPainter = struct {
     charTransformIndices: Buffer(u32).Slice,
     charTransformIndicesArray: []u32,
 
-    indiceChanges: ArrayList(Change),
+    solidTransforms: Buffer(Matrix(4)).Slice,
+    solidTransformIndices: Buffer(u32).Slice,
+    solidTransformIndicesArray: []u32,
+
+    textureIndiceChanges: ArrayList(Change),
+    solidIndiceChanges: ArrayList(Change),
 
     texture: Texture,
     textureCount: u16,
@@ -340,6 +353,8 @@ const TextPainter = struct {
         instanceTransformIndices: *Buffer(u32),
         charTransforms: *Buffer([2]f32),
         charTransformIndices: *Buffer(u32),
+        solidTransforms: *Buffer(Matrix(4)),
+        solidTransformIndices: *Buffer(u32),
         allocator: Allocator,
     ) error{ Init, Read, OutOfMemory }!TextPainter {
         var self: TextPainter = undefined;
@@ -353,14 +368,20 @@ const TextPainter = struct {
         self.instanceTransformIndicesArray = try allocator.alloc(u32, instanceMax);
         @memset(self.instanceTransformIndicesArray, 0);
 
-        self.charTransforms = try charTransforms.getSlice(textureMax);
+        self.charTransforms = try charTransforms.getSlice(textureMax + 1);
         self.charTransformIndices = try charTransformIndices.getSlice(instanceMax);
         self.charTransformIndicesArray = try allocator.alloc(u32, instanceMax);
         @memset(self.charTransformIndicesArray, 0);
 
+        self.solidTransforms = try solidTransforms.getSlice(1);
+        self.solidTransformIndices = try solidTransformIndices.getSlice(1);
+        self.solidTransformIndicesArray = try allocator.alloc(u32, 1);
+        @memset(self.solidTransformIndicesArray, 0);
+
         self.texture = Texture.new(overSize, overSize, textureMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
 
-        self.indiceChanges = try ArrayList(Change).initCapacity(allocator, 10);
+        self.textureIndiceChanges = try ArrayList(Change).initCapacity(allocator, 5);
+        self.solidIndiceChanges = try ArrayList(Change).initCapacity(allocator, 2);
 
         self.textureSize = @intCast(overSize);
         self.textureLocation = textureLocation;
@@ -374,13 +395,17 @@ const TextPainter = struct {
         self.instanceCount = 0;
         self.textureCount = 0;
 
-        self.rectangle = try Mesh.new("assets/plane.obj", allocator);
         self.font = try FreeType.new("assets/font.ttf", size);
         self.chars = Map(u32, CharSet).init(allocator);
 
         try self.chars.ensureTotalCapacity(textureMax * 2);
 
         try self.initCursor();
+
+        self.rectangle = try Mesh.new("assets/plane.obj", allocator);
+
+        self.instanceTransforms.bind(0);
+        self.instanceTransformIndices.bind(1);
 
         return self;
     }
@@ -469,7 +494,7 @@ const TextPainter = struct {
             return error.Max;
         }
 
-        if (set.textureId) |id| try self.appendChange(self.instanceCount, self.cursorX, self.cursorY, id);
+        if (set.textureId) |id| try self.insertChangeForTexture(self.instanceCount, id, self.cursorX, self.cursorY);
 
         self.instanceCount += 1;
         self.cursorX += 1;
@@ -477,14 +502,20 @@ const TextPainter = struct {
         try self.updateCursor();
     }
 
-    fn appendChange(self: *TextPainter, indice: u32, x: u32, y: u32, textureId: u32) error{OutOfMemory}!void {
+    fn insertChangeForTexture(self: *TextPainter, indice: u32, textureId: u32, x: u32, y: u32) error{OutOfMemory}!void {
+        const instanceValue = @as(u32, 0xFFFF) >> @as(u5, @intCast(16 * (indice % 2)));
+        self.instanceTransformIndicesArray[indice / 2] &= ~instanceValue;
+
+        const charValue = @as(u32, 0xFF) >> @as(u5, @intCast(8 * (indice % 4)));
+        self.charTransformIndicesArray[indice / 4] &= ~charValue;
+
         const offset = self.offsetOf(x, y);
 
         self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
         self.charTransformIndicesArray[indice / 4] |= textureId << @as(u5, @intCast(8 * (indice % 4)));
 
-        if (self.indiceChanges.items.len > 0) {
-            const change = &self.indiceChanges.items[self.indiceChanges.items.len - 1];
+        if (self.textureIndiceChanges.items.len > 0) {
+            const change = &self.textureIndiceChanges.items[self.textureIndiceChanges.items.len - 1];
 
             if (change.offset + change.count == indice) {
                 change.count += 1;
@@ -493,42 +524,59 @@ const TextPainter = struct {
             }
         }
 
-        try self.indiceChanges.append(.{
+        try self.textureIndiceChanges.append(.{
+            .offset = indice,
+            .count = 1,
+        });
+    }
+
+    fn insertChangeForSolid(self: *TextPainter, indice: u32, scaleId: u32, x: u32, y: u32) error{OutOfMemory}!void {
+        const instanceValue = @as(u32, 0xFFFF) >> @as(u5, @intCast(16 * (indice % 2)));
+        self.instanceTransformIndicesArray[indice / 2] &= ~instanceValue;
+
+        const solidValue = @as(u32, 0xFF) >> @as(u5, @intCast(8 * (indice % 4)));
+        self.solidTransformIndicesArray[indice / 4] &= ~solidValue;
+
+        const offset = self.offsetOf(x, y);
+
+        self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
+        self.solidTransformIndicesArray[indice / 4] |= scaleId << @as(u5, @intCast(8 * (indice % 4)));
+
+        if (self.solidIndiceChanges.items.len > 0) {
+            const change = &self.solidIndiceChanges.items[self.solidIndiceChanges.items.len - 1];
+
+            if (change.offset + change.count == indice) {
+                change.count += 1;
+
+                return;
+            }
+        }
+
+        try self.solidIndiceChanges.append(.{
             .offset = indice,
             .count = 1,
         });
     }
 
     fn initCursor(self: *TextPainter) error{OutOfMemory}!void {
-        _ = self;
-        // defer self.instanceCount += 1;
+        defer self.instanceCount += 1;
 
-        // const heightScale = @as(f32, @floatFromInt(self.font.height)) / @as(f32, @floatFromInt(self.textureSize));
-        // const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
+        const heightScale = @as(f32, @floatFromInt(self.font.height)) / @as(f32, @floatFromInt(self.textureSize));
+        const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
 
-        // self.charTransforms.pushData(self.textureMax, &.{IDENTITY.scale(.{
-        //     widthScale,
-        //     heightScale,
-        //     1,
-        //     1,
-        // }).translate(.{
-        //     -@as(f32, @floatFromInt(self.font.width)) / 2.0,
-        //     0,
-        //     0,
-        // })});
+        self.solidTransforms.pushData(0, &.{IDENTITY.scale(.{widthScale, heightScale, 1, 1}).translate(.{-@as(f32, @floatFromInt(self.font.width)) / 2.0, 0, 0})});//IDENTITY.scale(.{
 
-        // try self.updateCursor();
+        try self.updateCursor();
     }
 
     fn updateCursor(self: *TextPainter) error{OutOfMemory}!void {
-        _ = self;
-        // const cursorExcededRight = self.cursorX > self.rowChars;
-        // const cursorExcededBottom = self.cursorY > self.rowChars;
+        const cursorExcededRight = self.cursorX > self.rowChars;
+        const cursorExcededBottom = self.cursorY > self.rowChars;
 
-        // if (cursorExcededRight) {}
-        // if (cursorExcededBottom) {}
+        if (cursorExcededRight) {}
+        if (cursorExcededBottom) {}
 
-        // try self.appendChange(0, self.cursorX, self.cursorY, self.textureMax);
+        try self.insertChangeForSolid(0, 0, self.cursorX, self.cursorY);
     }
 
     fn offsetOf(self: *TextPainter, x: usize, y: usize) u32 {
@@ -538,11 +586,20 @@ const TextPainter = struct {
     pub fn drawChars(self: *TextPainter) void {
         if (self.instanceCount == 0) return;
 
+        self.charTransforms.bind(2);
+        self.charTransformIndices.bind(3);
+
         self.texture.bind(self.textureLocation, 0);
-        self.rectangle.draw(0, self.instanceCount);
+
+        self.rectangle.draw(1, self.instanceCount - 1);
+
+        self.texture.unbind(0);
     }
 
     pub fn drawCursors(self: *TextPainter) void {
+        self.solidTransforms.bind(2);
+        self.solidTransformIndices.bind(3);
+
         self.rectangle.draw(0, 1);
     }
 
@@ -575,9 +632,10 @@ const TextPainter = struct {
     }
 
     fn hasChange(self: *TextPainter) bool {
-        defer self.indiceChanges.clearRetainingCapacity();
+        defer self.textureIndiceChanges.clearRetainingCapacity();
+        defer self.solidIndiceChanges.clearRetainingCapacity();
 
-        for (self.indiceChanges.items) |change| {
+        for (self.textureIndiceChanges.items) |change| {
             const instanceTransformOffset = change.offset / 2;
             const instanceTransformCount = change.count / 2;
 
@@ -588,7 +646,18 @@ const TextPainter = struct {
             self.charTransformIndices.pushData(charTransformOffset, self.charTransformIndicesArray[charTransformOffset..charTransformOffset + charTransformCount + 1]);
         }
 
-        return self.indiceChanges.items.len > 0;
+        for (self.solidIndiceChanges.items) |change| {
+            const instanceTransformOffset = change.offset / 2;
+            const instanceTransformCount = change.count / 2;
+
+            const solidTransformOffset = change.offset / 4;
+            const solidTransformCount = change.count / 4;
+
+            self.instanceTransformIndices.pushData(instanceTransformOffset, self.instanceTransformIndicesArray[instanceTransformOffset..instanceTransformOffset + instanceTransformCount + 1]);
+            self.solidTransformIndices.pushData(solidTransformOffset, self.solidTransformIndicesArray[solidTransformOffset..solidTransformOffset + solidTransformCount + 1]);
+        }
+
+        return self.textureIndiceChanges.items.len > 0 or self.solidIndiceChanges.items.len > 0;
     }
 
     fn deinit(self: *const TextPainter) void {

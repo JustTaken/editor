@@ -227,13 +227,6 @@ pub fn Matrix(comptime N: u32) type {
         pub fn ortographic(self: Self, left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) Self {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
-            std.log.info("ortographic z: {}", .{-(far + near) / (far - near)});
-            // return self.mult(.{ .data = .{
-            //     .{ 2.0 / (right - left), 0.0, 0.0, -1.0 },
-            //     .{ 0.0, 2.0 / (top - bottom), 0.0, 1.0 },
-            //     .{ 0.0, 0.0, -2.0 / (far - near), 1.0 },
-            //     .{ 0.0, 0.0, 0.0, 1.0 },
-            // } });
             return self.mult(.{ .data = .{
                 .{ 2.0 / (right - left), 0.0, 0.0, -(right + left) / (right - left) },
                 .{ 0.0, 2.0 / (top - bottom), 0.0, (top + bottom) / (top - bottom) },

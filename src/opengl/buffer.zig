@@ -11,11 +11,16 @@ pub fn Buffer(comptime T: type) type {
 
         pub const Slice = struct {
             handle: gl.Buffer,
+            kind: gl.BufferTarget,
             offset: u32,
             count: u32,
 
             pub fn pushData(self: *Slice, offset: u32, data: []const T) void {
                 gl.namedBufferSubData(self.handle, offset * @sizeOf(T), T, data);
+            }
+
+            pub fn bind(self: *Slice, loc: u32) void {
+                gl.bindBufferBase(self.kind, loc, self.handle);
             }
         };
 
@@ -42,6 +47,7 @@ pub fn Buffer(comptime T: type) type {
             return .{
                 .handle = self.handle,
                 .offset = self.count,
+                .kind = self.kind,
                 .count = count,
             };
         }

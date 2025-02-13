@@ -47,14 +47,11 @@ pub fn main() !void {
 
     try window.commit();
 
-    var frame: u32 = 0;
     while (window.running) {
         window.getEvents() catch break;
 
         if (!painter.hasChange()) continue;
 
-        frame += 1;
-        std.log.info("Drawing: {}", .{frame});
         painter.draw();
 
         window.commit() catch break;
