@@ -10,7 +10,9 @@ in Vertex {
 };
 
 void main() {
-    vec4 tex = texture(textureSampler1, vec3(outTexture, textureIndex));
-    color = vec4(1.0, 1.0, 1.0, tex.r);
-    // color = vec4(tex.r, 1.0, 1.0, 1.0);
+    // color = vec4(1.0, 1.0, 1.0, texture(textureSampler1, vec3(outTexture, textureIndex)).r);
+    float tex = texture(textureSampler1, vec3(outTexture, textureIndex)).r;
+    float aaf = fwidth(tex);
+    float alpha = smoothstep(0.33 - aaf, 0.33 + aaf, tex);
+    color = vec4(1.0, 1.0, 1.0, alpha);
 }
