@@ -522,6 +522,8 @@ const Lines = struct {
     currentLine: *LineNode,
     currentBuffer: *BufferNode,
 
+    freeBuffers: List(LineBuffer),
+
     allocator: FixedBufferAllocator,
 
     const LineNode = List(Line).Node;
@@ -543,20 +545,6 @@ const Lines = struct {
             self.handle = handle.ptr;
             self.capacity = @intCast(handle.len);
             self.len = 0;
-        }
-
-        fn shiftData(self: *LineBuffer, offset: u32, count: u32) error{OutOfMemory}!void {
-            if (count > self.capacity) return error.OutOfMemory;
-            if (offset > self.len) return error.OutOfMemory;
-            var n = self.len;
-
-            if (self.len + count > self.capacity) n = self.capacity - count;
-
-            for (offset..n) |i| {
-                self.handle[offset + i + count] = self.handle[offset + i];
-            }
-
-            self.len = n + count;
         }
     };
 
@@ -581,9 +569,11 @@ const Lines = struct {
         fn print(self: *Line) void {
             var buffer = self.buffer.first;
 
+            var count: u32 = 0;
             while (buffer) |b| {
-                std.debug.print("{s}", .{b.data.handle[0..b.data.len]});
+                std.debug.print("{d:0>3} -> [{s}]\n", .{count, b.data.handle[0..b.data.len]});
                 buffer = b.next;
+                count += 1;
             }
         }
     };
@@ -603,8 +593,34 @@ const Lines = struct {
 
         self.lines = List(Line) {};
         self.lines.append(self.currentLine);
+        self.freeBuffers = List(LineBuffer) {};
 
         return self;
+    }
+
+    fn moveBack(self: *Lines, count: u32) void {
+        const bufferWithOffset = self.moveBackBufferNode(self.currentLine, self.currentBuffer, self.cursor.offset, count);
+        self.currentBuffer = bufferWithOffset.buffer;
+        self.cursor.offset = bufferWithOffset.offset;
+    }
+
+    fn moveBackBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) BufferNodeWithOffset {
+        if (count > offset) {
+            if (buffer.prev) |prev| {
+                std.debug.assert(prev.data.len == prev.data.capacity);
+                return self.moveBackBufferNode(line, prev, prev.data.len, count - offset);
+            }
+
+            return .{
+                .offset = 0,
+                .buffer = buffer,
+            };
+        }
+
+        return .{
+            .offset = offset - count,
+            .buffer = buffer,
+        };
     }
 
     fn insertChar(self: *Lines, char: u8) error{OutOfMemory}!void {
@@ -618,6 +634,44 @@ const Lines = struct {
         self.currentBuffer = bufferWithOffset.buffer;
     }
 
+    fn deleteForward(self: *Lines, count: u32) void {
+        self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count);
+    }
+
+    fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
+        if (count == 0) return;
+
+        if (count >= buffer.data.len - offset) {
+            var next = buffer.next;
+            var c = count - (buffer.data.len - offset);
+
+            while (next) |n| {
+                if (n.data.len > c) break;
+                c -= @intCast(n.data.len);
+                next = n.next;
+                self.removeBufferNode(line, n);
+            }
+
+            if (next) |n| {
+                const nextCount = min(buffer.data.len - offset, n.data.len - c);
+                defer buffer.data.len = @intCast(offset + nextCount);
+                std.mem.copyForwards(u8, buffer.data.handle[offset..offset + nextCount], n.data.handle[c..c + nextCount]);
+
+                self.deleteBufferNodeCount(line, n, 0, @intCast(c + nextCount));
+            } else {
+                buffer.data.len = offset;
+            }
+        } else {
+            std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.len - count], buffer.data.handle[offset + count..buffer.data.len]);
+
+            if (buffer.data.len == buffer.data.capacity) {
+                self.deleteBufferNodeCount(line, buffer, buffer.data.len - count, count);
+            } else {
+                buffer.data.len -= count;
+            }
+        }
+    }
+
     fn insertBufferNodeChars(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, chars: []const u8) error{OutOfMemory}!BufferNodeWithOffset {
         if (offset > buffer.data.len) return error.OutOfMemory;
         if (chars.len == 0) return .{
@@ -625,21 +679,29 @@ const Lines = struct {
             .offset = 0,
         };
 
-        if (chars.len > buffer.data.capacity - offset) {
-            defer buffer.data.len += buffer.data.capacity - offset;
+        if (chars.len + offset > buffer.data.capacity) {
+            defer buffer.data.len = buffer.data.capacity;
+
             try self.checkBufferNodeNext(line, buffer, @intCast(chars.len));
             _ = try self.insertBufferNodeChars(line, buffer.next.?, 0, buffer.data.handle[offset..buffer.data.len]);
 
-            @memcpy(buffer.data.handle[offset..buffer.data.capacity], chars[0..buffer.data.capacity - offset]);
+            std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.capacity], chars[0..buffer.data.capacity - offset]);
             return try self.insertBufferNodeChars(line, buffer.next.?, 0, chars[buffer.data.capacity - offset..]);
         } else if (chars.len + buffer.data.len > buffer.data.capacity) {
+            defer buffer.data.len = buffer.data.capacity;
+
             try self.checkBufferNodeNext(line, buffer, @intCast(chars.len));
+
             _ = try self.insertBufferNodeChars(line, buffer.next.?, 0, buffer.data.handle[buffer.data.capacity - chars.len..buffer.data.len]);
+
+            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len..buffer.data.capacity], buffer.data.handle[offset..buffer.data.capacity - chars.len]);
+        } else {
+            defer buffer.data.len += @intCast(chars.len);
+
+            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len..chars.len + buffer.data.len], buffer.data.handle[offset..buffer.data.len]);
         }
 
-        defer buffer.data.len += @intCast(chars.len);
-
-        @memcpy(buffer.data.handle[offset..offset + chars.len], chars);
+        std.mem.copyForwards(u8, buffer.data.handle[offset..offset + chars.len], chars);
 
         return .{
             .buffer = buffer,
@@ -647,21 +709,23 @@ const Lines = struct {
         };
     }
 
+    fn removeBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode) void {
+        line.data.buffer.remove(buffer);
+        self.freeBuffers.append(buffer);
+    }
+
     fn checkBufferNodeNext(self: *Lines, line: *LineNode, buffer: *BufferNode, size: u32) error{OutOfMemory}!void {
         if (buffer.next) |_| {} else {
-            const newBuffer = try self.allocator.allocator().create(BufferNode);
-            try newBuffer.data.init(self.allocator.allocator(), size);
+            if (self.freeBuffers.pop()) |l| {
+                l.data.len = 0;
+                line.data.buffer.insertAfter(buffer, l);
+            } else {
+                const newBuffer = try self.allocator.allocator().create(BufferNode);
+                try newBuffer.data.init(self.allocator.allocator(), size);
 
-            line.data.buffer.insertAfter(buffer, newBuffer);
+                line.data.buffer.insertAfter(buffer, newBuffer);
+            }
         }
-    }
-
-    fn max(first: usize, second: usize) usize {
-        return if (first > second) first else second;
-    }
-
-    fn min(first: usize, second: usize) usize {
-        return if (first < second) first else second;
     }
 
     fn print(self: *Lines) void {
@@ -693,21 +757,50 @@ const Cursor = struct {
     offset: u32,
 };
 
+fn min(first: usize, second: usize) usize {
+    return if (first < second) first else second;
+}
+
+fn max(first: usize, second: usize) usize {
+    return if (first > second) first else second;
+}
+
 test "testing" {
     var lines = try Lines.new(std.testing.allocator);
     defer std.testing.allocator.free(lines.allocator.buffer);
 
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
-    try lines.insertString("criancas nao fumem na escola se nao o diretor vai pegar voces e dar algumas boas pauladas\n");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+    try lines.insertString("987654321");
+
+    const line = 1;
+    const offset = 1;
+    lines.moveBack(line * 10 + offset + 1);
+
+    lines.deleteForward(1);
+    lines.print();
+    try lines.insertString("He");
+
+    // lines.moveBack(70);
+
+    lines.deleteForward(3);
+    lines.moveBack(line * 10 + offset + 1);
+    lines.deleteForward(4);
+
+    try lines.insertString("This is the new thing");
 
     lines.print();
 }
