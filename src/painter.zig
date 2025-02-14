@@ -516,7 +516,6 @@ pub const Painter = struct {
 
 const Lines = struct {
     cursor: Cursor,
-    pool: Pool,
 
     lines: List(Line),
 
@@ -538,8 +537,8 @@ const Lines = struct {
         len: u32,
         capacity: u32,
 
-        fn init(self: *LineBuffer, pool: *Pool, size: u32) error{OutOfMemory}!void {
-            const handle = try pool.get(size);
+        fn init(self: *LineBuffer, allocator: Allocator, size: u32) error{OutOfMemory}!void {
+            const handle = try allocator.alloc(u8, size);
 
             self.handle = handle.ptr;
             self.capacity = @intCast(handle.len);
@@ -564,15 +563,15 @@ const Lines = struct {
     const Line = struct {
         buffer: List(LineBuffer),
 
-        fn init(self: *Line, pool: *Pool, allocator: Allocator) error{OutOfMemory}!*BufferNode {
+        fn init(self: *Line, allocator: Allocator) error{OutOfMemory}!*BufferNode {
             self.buffer = List(LineBuffer) {};
 
-            return try self.append(pool, allocator);
+            return try self.append(allocator);
         }
 
-        fn append(self: *Line, pool: *Pool, allocator: Allocator) error{OutOfMemory}!*BufferNode {
+        fn append(self: *Line, allocator: Allocator) error{OutOfMemory}!*BufferNode {
             const buffer = try allocator.create(BufferNode);
-            try buffer.data.init(pool, 30);
+            try buffer.data.init(allocator, 30);
 
             self.buffer.append(buffer);
 
@@ -589,29 +588,6 @@ const Lines = struct {
         }
     };
 
-    const Pool = struct {
-        handle: [*]u8,
-        capacity: u32,
-        len: u32,
-
-        fn new(allocator: Allocator) error{OutOfMemory}!Pool {
-            const handle = try allocator.alloc(u8, std.mem.page_size >> 2);
-            
-            return .{
-                .handle = handle.ptr,
-                .capacity = @intCast(handle.len),
-                .len = 0,
-            };
-        }
-
-        fn get(self: *Pool, size: usize) error{OutOfMemory}![]u8 {
-            if (self.len + size > self.capacity) return error.OutOfMemory;
-
-            defer self.len += @intCast(size);
-            return self.handle[self.len..self.len + size];
-        }
-    };
-
     fn new(allocator: Allocator) error{OutOfMemory}!Lines {
         var self: Lines = undefined;
 
@@ -622,10 +598,8 @@ const Lines = struct {
         self.allocator = FixedBufferAllocator.init(try allocator.alloc(u8, std.mem.page_size));
         const fixedAllocator = self.allocator.allocator();
 
-        self.pool = try Pool.new(fixedAllocator);
-
         self.currentLine = try self.allocator.allocator().create(LineNode);
-        self.currentBuffer = try self.currentLine.data.init(&self.pool, fixedAllocator);
+        self.currentBuffer = try self.currentLine.data.init(fixedAllocator);
 
         self.lines = List(Line) {};
         self.lines.append(self.currentLine);
@@ -645,8 +619,6 @@ const Lines = struct {
     }
 
     fn insertBufferNodeChars(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, chars: []const u8) error{OutOfMemory}!BufferNodeWithOffset {
-        // std.debug.print("offset: {}, len: {}", .{offset, buffer.data.len});
-
         if (offset > buffer.data.len) return error.OutOfMemory;
         if (chars.len == 0) return .{
             .buffer = buffer,
@@ -678,7 +650,7 @@ const Lines = struct {
     fn checkBufferNodeNext(self: *Lines, line: *LineNode, buffer: *BufferNode, size: u32) error{OutOfMemory}!void {
         if (buffer.next) |_| {} else {
             const newBuffer = try self.allocator.allocator().create(BufferNode);
-            try newBuffer.data.init(&self.pool, size);
+            try newBuffer.data.init(self.allocator.allocator(), size);
 
             line.data.buffer.insertAfter(buffer, newBuffer);
         }
