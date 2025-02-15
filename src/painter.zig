@@ -38,12 +38,10 @@ pub const Painter = struct {
     charTransforms: Buffer([2]f32),
     charTransformIndices: Buffer(u32),
     charTransformIndicesArray: []u32,
-    // charIndiceChanges: ArrayList(Change),
 
     solidTransforms: Buffer(Matrix(4)),
     solidTransformIndices: Buffer(u32),
     solidTransformIndicesArray: []u32,
-    // solidIndiceChanges: ArrayList(Change),
 
     programTexture: Program,
     programNoTexture: Program,
@@ -61,7 +59,6 @@ pub const Painter = struct {
     textureMax: u32,
     textureLocation: u32,
 
-    instanceCount: u32,
     instanceMax: u32,
 
     cursorTransform: Matrix(4),
@@ -154,9 +151,6 @@ pub const Painter = struct {
         const overSize = config.size + 2;
         self.texture = Texture.new(overSize, overSize, config.charKindMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
 
-        // self.charIndiceChanges = try ArrayList(Change).initCapacity(allocator, 5);
-        // self.solidIndiceChanges = try ArrayList(Change).initCapacity(allocator, 2);
-
         self.textureSize = @intCast(overSize);
         self.textureLocation = textureLocation;
         self.instanceMax = config.instanceMax;
@@ -164,7 +158,6 @@ pub const Painter = struct {
 
         resize(self, config.width, config.height);
 
-        self.instanceCount = 0;
         self.textureCount = 0;
         self.cursorX = 0;
         self.cursorY = 0;
@@ -226,21 +219,6 @@ pub const Painter = struct {
                 std.log.err("Failed to insert {} into the buffer: {}", .{k, e});
                 continue;
             };
-
-            // const charSetEntry = self.chars.getOrPut(i) catch |e| {
-            //     std.log.err("Failed to register char of key: {}, code: {}, err: {}", .{ k, i, e });
-            //     continue;
-            // };
-
-            // if (!charSetEntry.found_existing) self.newCharSet(charSetEntry.value_ptr, i) catch |e| {
-            //     std.log.err("Failed to construct char bitmap for: {}, code: {}, {}", .{ k, i, e });
-            //     continue;
-            // };
-
-            // self.insertChar(charSetEntry.value_ptr) catch |e| {
-            //     std.log.err("Failed to add instance of: {}, to the screen, cause: {}", .{ k, e });
-            //     break;
-            // };
         }
     }
 
@@ -305,21 +283,6 @@ pub const Painter = struct {
 
         self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
         self.charTransformIndicesArray[indice / 4] |= textureId << @as(u5, @intCast(8 * (indice % 4)));
-
-        // if (self.charIndiceChanges.items.len > 0) {
-        //     const change = &self.charIndiceChanges.items[self.charIndiceChanges.items.len - 1];
-
-        //     if (change.offset + change.count == indice) {
-        //         change.count += 1;
-
-        //         return;
-        //     }
-        // }
-
-        // try self.charIndiceChanges.append(.{
-        //     .offset = indice,
-        //     .count = 1,
-        // });
     }
 
     fn insertChangeForSolid(self: *Painter, indice: u32, scaleId: u32, x: u32, y: u32) error{OutOfMemory}!void {
@@ -333,26 +296,9 @@ pub const Painter = struct {
 
         self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
         self.solidTransformIndicesArray[indice / 4] |= scaleId << @as(u5, @intCast(8 * (indice % 4)));
-
-        // if (self.solidIndiceChanges.items.len > 0) {
-        //     const change = &self.solidIndiceChanges.items[self.solidIndiceChanges.items.len - 1];
-
-        //     if (change.offset + change.count == indice) {
-        //         change.count += 1;
-
-        //         return;
-        //     }
-        // }
-
-        // try self.solidIndiceChanges.append(.{
-        //     .offset = indice,
-        //     .count = 1,
-        // });
     }
 
     fn initCursor(self: *Painter) error{OutOfMemory}!void {
-        defer self.instanceCount += 1;
-
         const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.font.height)) - @divFloor(self.font.descender, 2))) / @as(f32, @floatFromInt(self.textureSize));
         const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
 
@@ -360,32 +306,6 @@ pub const Painter = struct {
     }
 
     pub fn hasChange(self: *Painter) bool {
-
-        // defer self.charIndiceChanges.clearRetainingCapacity();
-        // defer self.solidIndiceChanges.clearRetainingCapacity();
-
-        // for (self.charIndiceChanges.items) |change| {
-        //     const instanceTransformOffset = change.offset / 2;
-        //     const instanceTransformCount = change.count / 2;
-
-        //     const charTransformOffset = change.offset / 4;
-        //     const charTransformCount = change.count / 4;
-
-        //     self.instanceTransformIndices.pushData(instanceTransformOffset, self.instanceTransformIndicesArray[instanceTransformOffset..instanceTransformOffset + instanceTransformCount + 1]);
-        //     self.charTransformIndices.pushData(charTransformOffset, self.charTransformIndicesArray[charTransformOffset..charTransformOffset + charTransformCount + 1]);
-        // }
-
-        // for (self.solidIndiceChanges.items) |change| {
-        //     const instanceTransformOffset = change.offset / 2;
-        //     const instanceTransformCount = change.count / 2;
-
-        //     const solidTransformOffset = change.offset / 4;
-        //     const solidTransformCount = change.count / 4;
-
-        //     self.instanceTransformIndices.pushData(instanceTransformOffset, self.instanceTransformIndicesArray[instanceTransformOffset..instanceTransformOffset + instanceTransformCount + 1]);
-        //     self.solidTransformIndices.pushData(solidTransformOffset, self.solidTransformIndicesArray[solidTransformOffset..solidTransformOffset + solidTransformCount + 1]);
-        // }
-
         const matrixChange = self.checkMatrixChange();
         const contentChange = self.checkContentChange();
 
@@ -453,6 +373,8 @@ pub const Painter = struct {
     }
 
     fn processWithModifiers(self: *Painter, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
+        _ = altActive;
+
         if (controlActive) {
             if (keys.contains(.LowerB)) {
                 self.lines.moveBack(1);
@@ -469,11 +391,11 @@ pub const Painter = struct {
             if (keys.contains(.LowerP)) {
                 self.lines.moveLineUp(1);
             }
+
+            if (keys.contains(.LowerD)) {
+                self.lines.deleteForward(1);
+            }
         }
-        // _ = self;
-        // _ = keys;
-        // _ = controlActive;
-        _ = altActive;
     }
 
     fn newCharSet(self: *Painter, set: *CharSet, code: u32) error{ CharNotFound, Max }!void {
@@ -505,11 +427,6 @@ pub const Painter = struct {
     }
 
     fn insertChar(self: *Painter, char: u32, x: u32, y: u32) error{Max, CharNotFound, OutOfMemory}!void {
-        if (self.instanceCount >= self.charMax) {
-            std.log.err("Maximun number of instances", .{});
-            return error.Max;
-        }
-
         const charSetEntry = try self.chars.getOrPut(char);
         if (!charSetEntry.found_existing) try self.newCharSet(charSetEntry.value_ptr, char);
 
@@ -523,7 +440,6 @@ pub const Painter = struct {
 
     fn offsetOf(self: *Painter, x: usize, y: usize) u32 {
         return @intCast((y * self.rowChars) + x);
-
     }
 
     fn resetChars(self: *Painter) void {
@@ -636,9 +552,6 @@ const Lines = struct {
 
     lines: List(Line),
 
-    // newChars: [20]CharInfo,
-    // newCharsLen: u32,
-
     change: bool,
 
     currentLine: *LineNode,
@@ -664,9 +577,15 @@ const Lines = struct {
             };
         }
 
-        fn newLine(self: *FreePool) error{OutOfMemory}!*LineNode {
+        fn newLine(self: *FreePool, first: ?*BufferNode, last: ?*BufferNode) error{OutOfMemory}!*LineNode {
             if (self.lines.pop()) |line| {
-                line.data.buffer.append(try self.newBuffer());
+                if (first) |b| {
+                    b.prev = null;
+                    line.data.buffer.first = b;
+                    line.data.buffer.last = last.?;
+                } else {
+                    line.data.buffer.append(try self.newBuffer());
+                }
 
                 return line;
             }
@@ -674,7 +593,14 @@ const Lines = struct {
             const line = try self.allocator.allocator().create(LineNode);
 
             line.data.buffer = .{};
-            line.data.buffer.append(try self.newBuffer());
+
+            if (first) |b| {
+                b.prev = null;
+                line.data.buffer.first = b;
+                line.data.buffer.last = last.?;
+            } else {
+                line.data.buffer.append(try self.newBuffer());
+            }
 
             return line;
         }
@@ -713,8 +639,9 @@ const Lines = struct {
 
     const LineBuffer = struct {
         handle: [*]u8,
-        len: u32,
-        capacity: u32,
+        len: u16,
+        capacity: u16,
+        start: u16,
 
         fn init(self: *LineBuffer, allocator: Allocator, size: u32) error{OutOfMemory}!void {
             const handle = try allocator.alloc(u8, size);
@@ -722,8 +649,8 @@ const Lines = struct {
             self.handle = handle.ptr;
             self.capacity = @intCast(handle.len);
             self.len = 0;
+            self.start = 0;
         }
-
     };
 
     const Line = struct {
@@ -771,7 +698,7 @@ const Lines = struct {
 
         self.freePool = FreePool.new(FixedBufferAllocator.init(try allocator.alloc(u8, std.mem.page_size)));
 
-        self.currentLine = try self.freePool.newLine();
+        self.currentLine = try self.freePool.newLine(null, null);
         self.currentBuffer = self.currentLine.data.buffer.first orelse unreachable;
 
         self.lines = .{};
@@ -932,7 +859,7 @@ const Lines = struct {
 
                 self.deleteBufferNodeCount(line, n, 0, @intCast(c + nextCount));
             } else {
-                buffer.data.len = offset;
+                buffer.data.len = @intCast(offset);
             }
         } else {
             std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.len - count], buffer.data.handle[offset + count..buffer.data.len]);
@@ -940,7 +867,7 @@ const Lines = struct {
             if (buffer.data.len == buffer.data.capacity) {
                 self.deleteBufferNodeCount(line, buffer, buffer.data.len - count, count);
             } else {
-                buffer.data.len -= count;
+                buffer.data.len -= @intCast(count);
             }
         }
     }
@@ -997,22 +924,20 @@ const Lines = struct {
     fn newLine(self: *Lines) error{OutOfMemory}!void {
         defer self.change = true;
 
-        // const next = self.currentBuffer.next;
-        // self.currentBuffer.next = null;
-        // self.currentLine.data.buffer.remove(self.currentBuffer);
-        const line = try self.freePool.newLine();
+        try self.checkBufferNodeNext(self.currentLine, self.currentBuffer);
 
+        const next = self.currentBuffer.next orelse unreachable;
+        const line = try self.freePool.newLine(next, self.currentLine.data.buffer.last);
         self.lines.insertAfter(self.currentLine, line);
+
+        self.currentBuffer.next = null;
+        self.currentLine.data.buffer.last = self.currentBuffer;
+
+        _ = try self.insertBufferNodeChars(line, next, 0, self.currentBuffer.data.handle[self.cursor.offset..self.currentBuffer.data.len]);
+        self.currentBuffer.data.len = @intCast(self.cursor.offset);
+
         self.currentLine = line;
-        self.currentBuffer = line.data.buffer.first orelse unreachable;
-
-
-        // const copyContent = self.currentBuffer.data.handle[self.cursor.offset..self.currentBuffer.data.len];
-        // self.currentBuffer.data.len = self.cursor.offset;
-        // self.currentBuffer = line.data.buffer.first orelse unreachable;
-        // self.currentBuffer.data.len = @intCast(copyContent.len);
-
-        // std.mem.copyForwards(u8, self.currentBuffer.data.handle[0..copyContent.len], copyContent);
+        self.currentBuffer = next;
 
         self.xOffset = 0;
         self.cursor.offset = 0;
@@ -1065,8 +990,6 @@ const Lines = struct {
             currentLine = currentLine.prev orelse unreachable;
         }
 
-        // std.log.info("geting iter with max x: {}", .{self.maxCols});
-
         return LineIter {
             .line = currentLine,
             .buffer = currentLine.data.buffer.first,
@@ -1094,11 +1017,6 @@ const Lines = struct {
     }
 };
 
-const Change = struct {
-    offset: u32,
-    count: u32,
-};
-
 const CharSet = struct {
     textureId: ?u16,
     advance: u16,
@@ -1117,64 +1035,4 @@ fn min(first: usize, second: usize) usize {
 
 fn max(first: usize, second: usize) usize {
     return if (first > second) first else second;
-}
-
-// test "testing" {
-//     var lines = try Lines.new(30, 20, std.testing.allocator);
-//     defer std.testing.allocator.free(lines.allocator.buffer);
-
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-//     try lines.insertString("987654321");
-
-//     const line = 1;
-//     const offset = 1;
-//     lines.moveBack(line * 10 + offset + 1);
-
-//     lines.deleteForward(1);
-//     lines.print();
-//     try lines.insertString("He");
-
-//     // lines.moveBack(70);
-
-//     lines.deleteForward(3);
-//     lines.moveBack(line * 10 + offset + 1);
-//     lines.deleteForward(4);
-
-//     try lines.insertString("This is the new thing");
-
-//     lines.print();
-// }
-test "tseting ass well" {
-    var lines = try Lines.new(30, 20, std.testing.allocator);
-    defer std.testing.allocator.free(lines.freePool.allocator.buffer);
-
-    try lines.insertString("0123456789012345678901234567890");
-    try lines.newLine();
-    try lines.insertString("four ");
-    try lines.insertString("five ");
-    try lines.insertString("fix ");
-
-    var iter = lines.iter();
-
-    while (iter.hasNextLine()) {
-        while (iter.nextChars()) |chars| {
-            std.debug.print("chars: {s}\n", .{chars});
-        }
-
-        std.debug.print("next line\n", .{});
-    }
 }
