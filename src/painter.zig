@@ -817,12 +817,11 @@ const Lines = struct {
         const x = self.cursor.x;
         self.cursor.x = 0;
 
-        if (self.currentLine.data.findBufferOffset(&self.cursor, self.xOffset + x)) |buffer| {
+        if (self.currentLine.data.findBufferOffset(&self.cursor, x)) |buffer| {
             self.currentBuffer = buffer;
             self.cursor.x = x;
         } else {
             self.currentBuffer = self.currentLine.data.buffer.last orelse unreachable;
-            self.xOffset = self.cursor.x;
             self.cursor.offset = self.currentBuffer.data.len;
         }
     }
@@ -834,7 +833,6 @@ const Lines = struct {
 
         self.currentBuffer = bufferWithOffset.buffer;
         self.cursor.offset = bufferWithOffset.offset;
-        self.checkCursor();
     }
 
     fn moveFowardBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) BufferNodeWithOffset {
@@ -867,7 +865,6 @@ const Lines = struct {
 
         self.currentBuffer = bufferWithOffset.buffer;
         self.cursor.offset = bufferWithOffset.offset;
-        self.checkCursor();
     }
 
     fn moveBackBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) BufferNodeWithOffset {
@@ -906,8 +903,6 @@ const Lines = struct {
         self.cursor.offset = bufferWithOffset.offset;
         self.currentBuffer = bufferWithOffset.buffer;
         self.cursor.x += @intCast(chars.len);
-
-        self.checkCursor();
     }
 
     fn deleteForward(self: *Lines, count: u32) void {
@@ -1002,42 +997,67 @@ const Lines = struct {
     fn newLine(self: *Lines) error{OutOfMemory}!void {
         defer self.change = true;
 
+        // const next = self.currentBuffer.next;
+        // self.currentBuffer.next = null;
+        // self.currentLine.data.buffer.remove(self.currentBuffer);
         const line = try self.freePool.newLine();
 
         self.lines.insertAfter(self.currentLine, line);
         self.currentLine = line;
         self.currentBuffer = line.data.buffer.first orelse unreachable;
 
-        self.xOffset = 0;
 
+        // const copyContent = self.currentBuffer.data.handle[self.cursor.offset..self.currentBuffer.data.len];
+        // self.currentBuffer.data.len = self.cursor.offset;
+        // self.currentBuffer = line.data.buffer.first orelse unreachable;
+        // self.currentBuffer.data.len = @intCast(copyContent.len);
+
+        // std.mem.copyForwards(u8, self.currentBuffer.data.handle[0..copyContent.len], copyContent);
+
+        self.xOffset = 0;
         self.cursor.offset = 0;
         self.cursor.x = 0;
         self.cursor.y += 1;
-
-        self.checkCursor();
     }
 
     fn checkCursor(self: *Lines) void {
-        if (self.cursor.x - self.xOffset >= self.maxCols) {
+        if (self.cursor.x >= self.maxCols + self.xOffset) {
             self.xOffset = self.cursor.x - self.maxCols + 1;
+        } else if (self.cursor.x < self.xOffset) {
+            self.xOffset = self.cursor.x;
         }
 
-        if (self.cursor.y - self.yOffset >= self.maxRows) {
+        if (self.cursor.y >= self.maxRows + self.yOffset) {
             self.yOffset = self.cursor.x - self.maxRows + 1;
+        } else if (self.cursor.y < self.yOffset) {
+            self.yOffset = self.cursor.y;
         }
     }
 
     fn removeLine(self: *Lines) void {
-        const currentLine = self.currentLine.next orelse self.currentLine.prev;
+        const currentLine: ?*LineNode = null;
+
+        if (self.currentLine.next) |line| {
+            currentLine = line;
+        } else if (self.currentLine.prev) |line| {
+            self.cursor.y -= 1;
+            currentLine = line;
+        }
 
         self.lines.remove(self.currentLine);
         self.freePool.freeLine(self.currentLine);
 
         self.currentLine = currentLine orelse self.freePool.newLine();
         self.currentBuffer = self.currentLine.data.buffer.first;
+
+        self.xOffset = 0;
+        self.cursor.offset = 0;
+        self.cursor.x = 0;
     }
 
     fn iter(self: *Lines) LineIter {
+        self.checkCursor();
+
         var currentLine = self.currentLine;
         var currentY = self.cursor.y;
 
