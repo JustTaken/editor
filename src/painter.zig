@@ -395,6 +395,14 @@ pub const Painter = struct {
             if (keys.contains(.LowerD)) {
                 self.lines.deleteForward(1);
             }
+
+            if (keys.contains(.LowerA)) {
+                self.lines.lineStart();
+            }
+
+            if (keys.contains(.LowerE)) {
+                self.lines.lineEnd();
+            }
         }
     }
 
@@ -503,6 +511,7 @@ const LineIter = struct {
     const zero: [2]u8 = .{0, 0};
 
     fn hasNextLine(self: *LineIter) bool {
+        if (self.cursor.y >= self.maxY) return false;
         const line = self.line orelse return false;
         self.cursor.x = 0;
         defer self.line = line.next;
@@ -921,6 +930,30 @@ const Lines = struct {
         }
     }
 
+    fn lineEnd(self: *Lines) void {
+        defer self.change = true;
+
+        var buffer: ?*BufferNode = self.currentBuffer;
+
+        while (buffer) |b| {
+            self.cursor.x += @intCast(b.data.len - self.cursor.offset);
+            self.cursor.offset = 0;
+
+            buffer = b.next;
+        }
+
+        self.currentBuffer = self.currentLine.data.buffer.last orelse unreachable;
+        self.cursor.offset = self.currentBuffer.data.len;
+    }
+
+    fn lineStart(self: *Lines) void {
+        defer self.change = true;
+
+        self.currentBuffer = self.currentLine.data.buffer.first orelse unreachable;
+        self.cursor.offset = 0;
+        self.cursor.x = 0;
+    }
+
     fn newLine(self: *Lines) error{OutOfMemory}!void {
         defer self.change = true;
 
@@ -939,7 +972,6 @@ const Lines = struct {
         self.currentLine = line;
         self.currentBuffer = next;
 
-        self.xOffset = 0;
         self.cursor.offset = 0;
         self.cursor.x = 0;
         self.cursor.y += 1;
@@ -953,7 +985,7 @@ const Lines = struct {
         }
 
         if (self.cursor.y >= self.maxRows + self.yOffset) {
-            self.yOffset = self.cursor.x - self.maxRows + 1;
+            self.yOffset = self.cursor.y - self.maxRows + 1;
         } else if (self.cursor.y < self.yOffset) {
             self.yOffset = self.cursor.y;
         }

@@ -188,7 +188,9 @@ pub const Key = enum(u32) {
     Nine = 57,
     Semicolon = 59,
 
+    Less = 60,
     Equal = 61,
+    Greater = 62,
     Question = 63,
     At = 64,
 
