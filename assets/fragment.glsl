@@ -15,4 +15,5 @@ void main() {
     float aaf = fwidth(tex);
     float alpha = smoothstep(0.33 - aaf, 0.33 + aaf, tex);
     color = vec4(1.0, 1.0, 1.0, alpha);
+    // color = vec4(1.0, alpha, 1.0, 1.0);
 }

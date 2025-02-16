@@ -8,7 +8,7 @@ const WIDTH: f32 = 800;
 const HEIGHT: f32 = 600;
 
 pub fn main() !void {
-    const buffer = try std.heap.page_allocator.alloc(u8, 32 * std.mem.page_size);
+    const buffer = try std.heap.page_allocator.alloc(u8, 16 * std.mem.page_size);
     defer std.heap.page_allocator.free(buffer);
 
     var fixedAllocator = FixedBufferAllocator.init(buffer);

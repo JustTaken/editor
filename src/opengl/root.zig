@@ -44,6 +44,7 @@ pub const OpenGL = struct {
             egl.EGL_GREEN_SIZE,      8,
             egl.EGL_BLUE_SIZE,       8,
             egl.EGL_ALPHA_SIZE,      8,
+            egl.EGL_DEPTH_SIZE,      8,
             egl.EGL_NONE,
         };
 
@@ -116,6 +117,7 @@ pub const OpenGL = struct {
         gl.enable(.cull_face);
         gl.enable(.depth_test);
         gl.enable(.blend);
+        gl.depthFunc(.less_or_equal);
         gl.blendFunc(.src_alpha, .one_minus_src_alpha);
         gl.pixelStore(.unpack_alignment, 1);
         gl.debugMessageCallback({}, errorCallback);
@@ -126,6 +128,7 @@ pub const OpenGL = struct {
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clearDepth(1.0);
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {

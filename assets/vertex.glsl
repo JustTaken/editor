@@ -7,15 +7,24 @@ layout (location = 2) in vec2 vTexture;
 layout(std430, binding = 0) readonly buffer InstanceTransform {
     vec2 instanceTransforms[];
 };
+
 layout(std430, binding = 1) readonly buffer InstanceTransformIndex {
     uint instanceTransformIndices[];
 };
 
-layout(std430, binding = 2) readonly buffer CharTransform {
+layout(std430, binding = 2) readonly buffer InstanceDepth {
+    float depthTransforms[];
+};
+
+layout(std430, binding = 3) readonly buffer InstanceDepthIndex {
+    uint instanceDepthIndices[];
+};
+
+layout(std430, binding = 4) readonly buffer CharTransform {
     vec2 charTransforms[];
 };
 
-layout(std430, binding = 3) readonly buffer CharTransformIndex {
+layout(std430, binding = 5) readonly buffer CharTransformIndex {
     uint charTransformIndices[]; // TODO: For now this array does not uses index 0, because it is indexed by the same variable as instanceTransformIndices and instanceScaleIndices. The variable in the second shader "rawVertex.glsl" the instanceScaleIndices comes first and for now uses index 0;
 };
 
@@ -38,10 +47,12 @@ void main() {
     int instanceId = gl_InstanceID + gl_BaseInstance;
     int instanceIndice = int(int(instanceTransformIndices[instanceId / 2]) >> (16 * (instanceId % 2))) & 0xFFFF;
     int textureIndice = int(int(charTransformIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
+    int depthIndice = int(int(instanceDepthIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
 
     mat4 transform = mat4(1.0);
     transform[0][3] = instanceTransforms[instanceIndice].x + charTransforms[textureIndice].x;
     transform[1][3] = instanceTransforms[instanceIndice].y + charTransforms[textureIndice].y;
+    transform[2][3] = depthTransforms[depthIndice];
 
     mat4 model = mat4(1.0);
     model[0][0] = worldScale;

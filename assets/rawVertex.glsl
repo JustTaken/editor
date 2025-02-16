@@ -7,15 +7,24 @@ layout (location = 2) in vec2 vTexture;
 layout(std430, binding = 0) readonly buffer InstanceTransform {
     vec2 instanceTransforms[];
 };
+
 layout(std430, binding = 1) readonly buffer InstanceTransformIndex {
     uint instanceTransformIndices[];
 };
 
-layout(std430, binding = 2) readonly buffer InstanceScale {
+layout(std430, binding = 2) readonly buffer InstanceDepth {
+    float depthTransforms[];
+};
+
+layout(std430, binding = 3) readonly buffer InstanceDepthIndex {
+    uint instanceDepthIndices[];
+};
+
+layout(std430, binding = 4) readonly buffer InstanceScale {
     mat4 instanceScale[];
 };
 
-layout(std430, binding = 3) readonly buffer InstanceScaleIndex {
+layout(std430, binding = 5) readonly buffer InstanceScaleIndex {
     uint instanceScaleIndices[];
 };
 
@@ -38,10 +47,12 @@ void main() {
     int instanceId = gl_InstanceID + gl_BaseInstance;
     int instanceIndice = int(int(instanceTransformIndices[instanceId / 2]) >> (16 * (instanceId % 2))) & 0xFFFF;
     int scaleIndice = int(int(instanceScaleIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
+    int depthIndice = int(int(instanceDepthIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
 
     mat4 transform = mat4(1.0);
     transform[0][3] = instanceTransforms[instanceIndice].x;
     transform[1][3] = instanceTransforms[instanceIndice].y;
+    transform[2][3] = depthTransforms[depthIndice];
 
     mat4 model = mat4(1.0);
     model[0][0] = worldScale;

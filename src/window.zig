@@ -12,7 +12,7 @@ const FAR: f32 = 10;
 const SIZE: u16 = 32;
 const SCALE: f32 = 1.0;
 
-const CHAR_COUNT: u32 = 64;
+const CHAR_COUNT: u32 = 92;
 const INSTANCE_MAX: u32 = 1024 * 8;
 
 pub const Window = struct {
@@ -62,8 +62,9 @@ pub const Window = struct {
     }
 
     pub fn draw(self: *Window) error{Fail}!void {
+        const time = std.time.Instant.now() catch return error.Fail;
+
         if (self.display.display.roundtrip() != .SUCCESS) return error.Fail;
-        defer sleep(30);
 
         self.input.tick();
 
@@ -72,6 +73,12 @@ pub const Window = struct {
         self.painter.draw();
 
         self.commit() catch return error.Fail;
+
+        sleep(30);
+
+        const end = std.time.Instant.now() catch return error.Fail; 
+        const elapsed = end.since(time);
+        std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
     }
 
     pub fn commit(self: *Window) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {

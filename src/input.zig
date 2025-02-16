@@ -4,11 +4,9 @@ const xkb = @cImport({
     @cInclude("xkbcommon/xkbcommon.h");
 });
 
-
 const EVDEV_SCANCODE_OFFSET: u32 = 8;
 
 const Keys = std.EnumSet(Key);
-const Mutex = std.Thread.Mutex;
 
 pub const Xkbcommon = struct {
     context: *xkb.xkb_context,
@@ -45,6 +43,7 @@ pub const Xkbcommon = struct {
 
         return self;
     }
+
     pub fn init(self: *Xkbcommon, keymap: [*:0]const u8, format: wl.Keyboard.KeymapFormat) error{ Init, Keymap, State }!void {
         self.context = xkb.xkb_context_new(xkb.XKB_CONTEXT_NO_FLAGS) orelse return error.Init;
         self.keymap = xkb.xkb_keymap_new_from_string(self.context, keymap, @intCast(@intFromEnum(format)), xkb.XKB_KEYMAP_COMPILE_NO_FLAGS) orelse return error.Keymap;
@@ -186,6 +185,7 @@ pub const Key = enum(u32) {
     Seven = 55,
     Eight = 56,
     Nine = 57,
+    Colon = 58,
     Semicolon = 59,
 
     Less = 60,

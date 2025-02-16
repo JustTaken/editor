@@ -52,7 +52,7 @@ pub const Shader = struct {
         var self: Shader = undefined;
         self.kind = kind;
 
-        const buffer = try allocator.alloc(u8, 2 * 1024);
+        const buffer = try allocator.alloc(u8, 3 * 1024);
         defer allocator.free(buffer);
 
         const source = std.fs.cwd().readFile(path, buffer) catch return error.Read;
