@@ -134,14 +134,11 @@ pub const Xkbcommon = struct {
             return;
         };
 
+        if (xkb.xkb_keymap_key_repeats(self.keymap, code + EVDEV_SCANCODE_OFFSET) == 0) return;
+        self.resetRepeat();
+
         switch (state) {
-            .pressed => {
-                if (xkb.xkb_keymap_key_repeats(self.keymap, code + EVDEV_SCANCODE_OFFSET) == 0) return;
-
-                self.resetRepeat();
-
-                self.keys.insert(key);
-            },
+            .pressed => self.keys.insert(key),
             .released => self.keys.remove(key),
             _ => {},
         }

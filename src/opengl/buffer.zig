@@ -36,8 +36,9 @@ pub fn Buffer(comptime T: type) type {
                 self.indices[offset / coef] |= index << @as(u5, @intCast(self.indexSize * ByteSize * (offset % coef)));
             }
 
-            pub fn syncIndex(self: *Indexer) bool {
-                gl.namedBufferSubData(self.indiceHandle, 0, u32, self.indices);
+            pub fn syncIndex(self: *Indexer, size: u32) bool {
+                const alignSize = @sizeOf(u32) - (size % @sizeOf(u32)) + size;
+                gl.namedBufferSubData(self.indiceHandle, 0, u32, self.indices[0..alignSize / (@sizeOf(u32) / self.indexSize)]);
 
                 return true;
             }

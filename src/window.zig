@@ -78,6 +78,7 @@ pub const Window = struct {
 
         const end = std.time.Instant.now() catch return error.Fail; 
         const elapsed = end.since(time);
+        // _ = elapsed;
         std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
     }
 

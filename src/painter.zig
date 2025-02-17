@@ -25,8 +25,7 @@ const IDENTITY = Matrix(4).identity();
 const VELOCITY: f32 = 3.0;
 
 pub const Painter = struct {
-    font: FreeType,
-    chars: Map(u32, CharSet),
+    glyphGenerator: GlyphGenerator,
     rectangle: Mesh,
 
     freePool: FreePool,
@@ -44,23 +43,15 @@ pub const Painter = struct {
 
     matrixUniforms: Buffer(Matrix(4)),
     matrixUniformArray: [2]Matrix(4),
-
-    scaleUniforms: Buffer(f32),
-    scaleUniformArray: [3]f32,
-
     changes: [2]bool,
 
-    texture: Texture,
-    textureCount: u16,
-    textureMax: u32,
+    scaleUniforms: Buffer(f32),
+    scaleUniformArray: [2]f32,
+
     textureLocation: u32,
 
     instanceMax: u32,
     totalInstances: u32,
-
-    cursorTransform: Matrix(4),
-    cursorX: u32,
-    cursorY: u32,
 
     textureSize: u16,
 
@@ -96,13 +87,14 @@ pub const Painter = struct {
         self.near = config.near;
         self.far = config.far;
         self.scale = config.scale;
+
         const allocator = self.allocator.allocator();
 
         const vertexShader = try Shader.fromPath(.vertex, "assets/vertex.glsl", allocator);
         const fragmentShader = try Shader.fromPath(.fragment, "assets/fragment.glsl", allocator);
 
         self.programTexture = try Program.new(vertexShader, fragmentShader, allocator);
-        const textureLocation = try self.programTexture.uniformLocation("textureSampler1");
+        self.textureLocation = try self.programTexture.uniformLocation("textureSampler1");
 
         vertexShader.deinit();
         fragmentShader.deinit();
@@ -116,36 +108,28 @@ pub const Painter = struct {
         rawFragmentShader.deinit();
 
         self.rectangle = try Mesh.new("assets/plane.obj", allocator);
-        self.font = try FreeType.new("assets/font.ttf", config.size);
-        self.chars = Map(u32, CharSet).init(allocator);
-        try self.chars.ensureTotalCapacity((config.charKindMax * 4) / 5);
 
         self.instanceTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null).indexer(config.instanceMax, u16, allocator);
         self.charTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.charKindMax, null).indexer(config.instanceMax, u8, allocator);
         self.solidTransforms = try Buffer(Matrix(4)).new(.shader_storage_buffer, 1, null).indexer(1, u8, allocator);
-        self.depthTransforms = try Buffer(f32).new(.shader_storage_buffer, 2, &.{0, -0.5}).indexer(config.instanceMax, u8, allocator);
+        self.depthTransforms = try Buffer(f32).new(.shader_storage_buffer, 2, &.{ 1, 0 }).indexer(config.instanceMax, u8, allocator);
         self.depthTransforms.pushIndex(0, 1);
-        _ = self.depthTransforms.syncIndex();
+        _ = self.depthTransforms.syncIndex(1);
 
         self.scaleUniformArray[0] = @floatFromInt(config.size / 2);
         self.scaleUniformArray[1] = config.scale;
         self.scaleUniforms = Buffer(f32).new(.uniform_buffer, 2, &self.scaleUniformArray);
 
-        self.matrixUniformArray = .{ IDENTITY.translate(.{self.scaleUniformArray[0], -self.scaleUniformArray[0], -1}), IDENTITY.ortographic(0, @floatFromInt(config.width), 0, @floatFromInt(config.height), config.near, config.far) };
+        self.matrixUniformArray = .{ IDENTITY.translate(.{ self.scaleUniformArray[0], -self.scaleUniformArray[0], 1.0 }), IDENTITY.ortographic(0, @floatFromInt(config.width), 0, @floatFromInt(config.height), config.near, config.far) };
         self.matrixUniforms = Buffer(Matrix(4)).new(.uniform_buffer, 2, &self.matrixUniformArray);
         self.changes = .{false} ** 2;
 
-        const overSize = config.size + 2;
-        self.texture = Texture.new(overSize, overSize, config.charKindMax, .r8, .red, .unsigned_byte, .@"2d_array", null);
+        try self.glyphGenerator.init(config.size, &self.charTransforms, config.charKindMax, allocator);
 
-        self.textureSize = @intCast(overSize);
-        self.textureLocation = textureLocation;
         self.instanceMax = config.instanceMax;
-        self.textureMax = config.charKindMax;
 
         resize(self, config.width, config.height);
 
-        self.textureCount = 0;
         self.totalInstances = 0;
 
         self.freePool = FreePool.new(FixedBufferAllocator.init(try self.allocator.allocator().alloc(u8, std.mem.page_size)));
@@ -196,7 +180,7 @@ pub const Painter = struct {
             }
 
             self.lines[self.focusedIndex].insertChar(@intCast(i)) catch |e| {
-                std.log.err("Failed to insert {} into the buffer: {}", .{k, e});
+                std.log.err("Failed to insert {} into the buffer: {}", .{ k, e });
                 continue;
             };
         }
@@ -211,8 +195,8 @@ pub const Painter = struct {
         self.matrixUniformArray[1] = IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), self.near, self.far);
         self.changes[1] = true;
 
-        const rowChars: f32 = @floatFromInt(width / self.font.width);
-        const colChars: f32 = @floatFromInt(height / self.font.height);
+        const rowChars: f32 = @floatFromInt(width / self.glyphGenerator.font.width);
+        const colChars: f32 = @floatFromInt(height / self.glyphGenerator.font.height);
 
         self.rowChars = @intFromFloat(rowChars / self.scale);
         self.colChars = @intFromFloat(colChars / self.scale);
@@ -226,7 +210,7 @@ pub const Painter = struct {
         defer allocator.free(transforms);
 
         if (charMax > self.instanceMax) {
-            std.log.err("Failed to resize text window, required glyph slot count: {}, given: {}", .{charMax, self.instanceMax});
+            std.log.err("Failed to resize text window, required glyph slot count: {}, given: {}", .{ charMax, self.instanceMax });
             return;
         }
 
@@ -234,8 +218,8 @@ pub const Painter = struct {
             for (0..self.colChars) |i| {
                 const offset = self.offsetOf(j, i);
 
-                const xPos: f32 = @floatFromInt(self.font.width * j);
-                const yPos: f32 = @floatFromInt(self.font.height * i);
+                const xPos: f32 = @floatFromInt(self.glyphGenerator.font.width * j);
+                const yPos: f32 = @floatFromInt(self.glyphGenerator.font.height * i);
 
                 transforms[offset] = .{ xPos, -yPos };
             }
@@ -254,16 +238,6 @@ pub const Painter = struct {
 
         self.instanceTransforms.pushIndex(indice, offset);
         self.charTransforms.pushIndex(indice, textureId);
-
-        // const instanceValue = @as(u32, 0xFFFF) << @as(u5, @intCast(16 * (indice % 2)));
-        // self.instanceTransformIndicesArray[indice / 2] &= ~instanceValue;
-
-        // const charValue = @as(u32, 0xFF) << @as(u5, @intCast(8 * (indice % 4)));
-        // self.charTransformIndicesArray[indice / 4] &= ~charValue;
-
-
-        // self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
-        // self.charTransformIndicesArray[indice / 4] |= textureId << @as(u5, @intCast(8 * (indice % 4)));
     }
 
     fn insertChangeForSolid(self: *Painter, indice: u32, scaleId: u32, x: u32, y: u32) void {
@@ -271,23 +245,13 @@ pub const Painter = struct {
 
         self.instanceTransforms.pushIndex(indice, offset);
         self.solidTransforms.pushIndex(indice, scaleId);
-
-        // const instanceValue = @as(u32, 0xFFFF) >> @as(u5, @intCast(16 * (indice % 2)));
-        // self.instanceTransformIndicesArray[indice / 2] &= ~instanceValue;
-
-        // const solidValue = @as(u32, 0xFF) >> @as(u5, @intCast(8 * (indice % 4)));
-        // self.solidTransformIndicesArray[indice / 4] &= ~solidValue;
-
-
-        // self.instanceTransformIndicesArray[indice / 2] |= offset << @as(u5, @intCast(16 * (indice % 2)));
-        // self.solidTransformIndicesArray[indice / 4] |= scaleId << @as(u5, @intCast(8 * (indice % 4)));
     }
 
     fn initCursor(self: *Painter) void {
-        const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.font.height)) - @divFloor(self.font.descender, 2))) / @as(f32, @floatFromInt(self.textureSize));
-        const widthScale = @as(f32, @floatFromInt(self.font.width)) / @as(f32, @floatFromInt(self.textureSize));
+        const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
+        const widthScale = @as(f32, @floatFromInt(self.glyphGenerator.font.width)) / @as(f32, @floatFromInt(self.glyphGenerator.size));
 
-        self.solidTransforms.pushData(0, &.{IDENTITY.scale(.{widthScale, heightScale, 1, 1}).translate(.{-@as(f32, @floatFromInt(self.font.width)) / 2.0, @floatFromInt(@divFloor(self.font.descender, 2)), 0})});//IDENTITY.scale(.{
+        self.solidTransforms.pushData(0, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 }).translate(.{ -@as(f32, @floatFromInt(self.glyphGenerator.font.width)) / 2.0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })}); //IDENTITY.scale(.{
     }
 
     pub fn hasChange(self: *Painter) bool {
@@ -370,12 +334,9 @@ pub const Painter = struct {
 
         self.insertChangeForSolid(0, 0, xPos, yPos);
 
-        _ = self.instanceTransforms.syncIndex();
-        _ = self.solidTransforms.syncIndex();
-        _ = self.charTransforms.syncIndex();
-        // self.instanceTransformIndices.pushData(self.instanceTransformIndicesArray[0..self.totalInstances / 2 + 1]);
-        // .pushData(self.solidTransformIndicesArray[0..1]);
-        // .pushData(self.charTransformIndicesArray[0..self.totalInstances / 4 + 1]);
+        _ = self.instanceTransforms.syncIndex(self.instanceMax);
+        _ = self.solidTransforms.syncIndex(1);
+        _ = self.charTransforms.syncIndex(self.instanceMax);
 
         return true;
     }
@@ -420,46 +381,13 @@ pub const Painter = struct {
                     }
                 }
             },
-            1 => { },
+            1 => {},
             else => unreachable,
         }
     }
 
-    fn newCharSet(self: *Painter, set: *CharSet, code: u32) error{ CharNotFound, Max }!void {
-        set.textureId = null;
-
-        if (self.textureCount >= self.textureMax) {
-            std.log.err("Max number of chars", .{});
-
-            return error.Max;
-        }
-
-        const char = try self.font.findChar(code);
-
-        set.advance = @intCast(char.advance);
-        set.bearing = char.bearing;
-
-        if (char.buffer) |b| {
-            defer self.textureCount += 1;
-
-            set.textureId = self.textureCount;
-
-            self.texture.pushData(char.width, char.height, self.textureCount, .red, .unsigned_byte, b);
-
-            const deltaX: f32 = @floatFromInt(set.bearing[0]);
-            const deltaY: f32 = @floatFromInt((self.textureSize - set.bearing[1]));
-
-            self.charTransforms.pushData(self.textureCount, &.{.{ deltaX, -deltaY }});
-        }
-    }
-
-    fn insertChar(self: *Painter, char: u32, x: u32, y: u32) error{Max, CharNotFound, OutOfMemory}!void {
-        const charSetEntry = try self.chars.getOrPut(char);
-        if (!charSetEntry.found_existing) try self.newCharSet(charSetEntry.value_ptr, char);
-
-        const set = charSetEntry.value_ptr;
-
-        if (set.textureId) |id| {
+    fn insertChar(self: *Painter, char: u32, x: u32, y: u32) error{ Max, CharNotFound, OutOfMemory }!void {
+        if (try self.glyphGenerator.get(char)) |id| {
             self.totalInstances += 1;
             self.insertChangeForTexture(self.totalInstances, id, x, y);
         }
@@ -476,11 +404,11 @@ pub const Painter = struct {
     fn drawChars(self: *Painter) void {
         self.charTransforms.bind(4, 5);
 
-        self.texture.bind(self.textureLocation, 0);
+        self.glyphGenerator.texture.bind(self.textureLocation, 0);
 
         self.rectangle.draw(1, self.totalInstances);
 
-        self.texture.unbind(0);
+        self.glyphGenerator.texture.unbind(0);
     }
 
     fn drawCursors(self: *Painter) void {
@@ -500,13 +428,14 @@ pub const Painter = struct {
     }
 
     pub fn deinit(self: *const Painter) void {
-        self.texture.deinit();
         self.rectangle.deinit();
+        self.glyphGenerator.deinit();
         self.instanceTransforms.deinit();
         self.matrixUniforms.deinit();
         self.scaleUniforms.deinit();
         self.charTransforms.deinit();
         self.solidTransforms.deinit();
+        self.depthTransforms.deinit();
         self.programTexture.deinit();
         self.programNoTexture.deinit();
     }
@@ -522,7 +451,7 @@ const RangeIter = struct {
     maxX: u32,
     maxY: u32,
 
-    const zero: [2]u8 = .{0, 0};
+    const zero: [2]u8 = .{ 0, 0 };
 
     fn hasNextLine(self: *RangeIter) bool {
         if (self.cursor.y >= self.maxY) return false;
@@ -583,7 +512,7 @@ const Line = struct {
 
         var count: u32 = 0;
         while (buffer) |b| {
-            std.debug.print("{d:0>3} -> [{s}]\n", .{count, b.data.handle[0..b.data.len]});
+            std.debug.print("{d:0>3} -> [{s}]\n", .{ count, b.data.handle[0..b.data.len] });
             buffer = b.next;
             count += 1;
         }
@@ -624,15 +553,9 @@ const FreePool = struct {
         };
     }
 
-    fn newLine(self: *FreePool, first: ?*BufferNode, last: ?*BufferNode) error{OutOfMemory}!*LineNode {
+    fn newLine(self: *FreePool) error{OutOfMemory}!*LineNode {
         if (self.lines.pop()) |line| {
-            if (first) |b| {
-                b.prev = null;
-                line.data.buffer.first = b;
-                line.data.buffer.last = last.?;
-            } else {
-                line.data.buffer.append(try self.newBuffer());
-            }
+            line.data.buffer = .{};
 
             return line;
         }
@@ -640,14 +563,6 @@ const FreePool = struct {
         const line = try self.allocator.allocator().create(LineNode);
 
         line.data.buffer = .{};
-
-        if (first) |b| {
-            b.prev = null;
-            line.data.buffer.first = b;
-            line.data.buffer.last = last.?;
-        } else {
-            line.data.buffer.append(try self.newBuffer());
-        }
 
         return line;
     }
@@ -711,8 +626,9 @@ const Lines = struct {
 
         self.freePool = freePool;
 
-        self.currentLine = try self.freePool.newLine(null, null);
-        self.currentBuffer = self.currentLine.data.buffer.first.?;
+        self.currentLine = try self.freePool.newLine();
+        self.currentBuffer = try self.freePool.newBuffer();
+        self.currentLine.data.buffer.append(self.currentBuffer);
 
         self.lines = .{};
         self.lines.append(self.currentLine);
@@ -851,31 +767,56 @@ const Lines = struct {
         self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count);
     }
 
+    fn nextBufferOrJoin(self: *Lines, line: *LineNode, buffer: *BufferNode, count: *u32) ?*BufferNode {
+        if (buffer.next) |_| {} else {
+            if (line.next) |l| {
+                while (l.data.buffer.pop()) |buf| {
+                    line.data.buffer.insertAfter(buffer, buf);
+                }
+
+                self.lines.remove(l);
+                self.freePool.freeLine(l);
+
+                count.* -= 1;
+            }
+        }
+
+        return buffer.next;
+    }
+
+    fn nextBuffer(_: *Lines, _: *LineNode, buffer: *BufferNode, _: *u32) ?*BufferNode {
+        return buffer.next;
+    }
+
     fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
         if (count == 0) return;
 
         if (count >= buffer.data.len - offset) {
-            var next = buffer.next;
+            const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > buffer.data.len - offset) nextBufferOrJoin else nextBuffer;
+
             var c = count - (buffer.data.len - offset);
+            var next = f(self, line, buffer, &c);
 
             while (next) |n| {
                 if (n.data.len > c) break;
                 c -= @intCast(n.data.len);
-                next = n.next;
+
+                next = f(self, line, n, &c);
                 self.removeBufferNode(line, n);
             }
 
             if (next) |n| {
-                const nextCount = min(buffer.data.len - offset, n.data.len - c);
+                const nextCount = min(buffer.data.capacity - offset, n.data.len - c);
+
                 defer buffer.data.len = @intCast(offset + nextCount);
-                std.mem.copyForwards(u8, buffer.data.handle[offset..offset + nextCount], n.data.handle[c..c + nextCount]);
+                std.mem.copyForwards(u8, buffer.data.handle[offset .. offset + nextCount], n.data.handle[c .. c + nextCount]);
 
                 self.deleteBufferNodeCount(line, n, 0, @intCast(c + nextCount));
             } else {
                 buffer.data.len = @intCast(offset);
             }
         } else {
-            std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.len - count], buffer.data.handle[offset + count..buffer.data.len]);
+            std.mem.copyForwards(u8, buffer.data.handle[offset .. buffer.data.len - count], buffer.data.handle[offset + count .. buffer.data.len]);
 
             if (buffer.data.len == buffer.data.capacity) {
                 self.deleteBufferNodeCount(line, buffer, buffer.data.len - count, count);
@@ -898,23 +839,23 @@ const Lines = struct {
             try self.checkBufferNodeNext(line, buffer);
             _ = try self.insertBufferNodeChars(line, buffer.next.?, 0, buffer.data.handle[offset..buffer.data.len]);
 
-            std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.capacity], chars[0..buffer.data.capacity - offset]);
-            return try self.insertBufferNodeChars(line, buffer.next.?, 0, chars[buffer.data.capacity - offset..]);
+            std.mem.copyForwards(u8, buffer.data.handle[offset..buffer.data.capacity], chars[0 .. buffer.data.capacity - offset]);
+            return try self.insertBufferNodeChars(line, buffer.next.?, 0, chars[buffer.data.capacity - offset ..]);
         } else if (chars.len + buffer.data.len > buffer.data.capacity) {
             defer buffer.data.len = buffer.data.capacity;
 
             try self.checkBufferNodeNext(line, buffer);
 
-            _ = try self.insertBufferNodeChars(line, buffer.next.?, 0, buffer.data.handle[buffer.data.capacity - chars.len..buffer.data.len]);
+            _ = try self.insertBufferNodeChars(line, buffer.next.?, 0, buffer.data.handle[buffer.data.capacity - chars.len .. buffer.data.len]);
 
-            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len..buffer.data.capacity], buffer.data.handle[offset..buffer.data.capacity - chars.len]);
+            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len .. buffer.data.capacity], buffer.data.handle[offset .. buffer.data.capacity - chars.len]);
         } else {
             defer buffer.data.len += @intCast(chars.len);
 
-            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len..chars.len + buffer.data.len], buffer.data.handle[offset..buffer.data.len]);
+            std.mem.copyBackwards(u8, buffer.data.handle[offset + chars.len .. chars.len + buffer.data.len], buffer.data.handle[offset..buffer.data.len]);
         }
 
-        std.mem.copyForwards(u8, buffer.data.handle[offset..offset + chars.len], chars);
+        std.mem.copyForwards(u8, buffer.data.handle[offset .. offset + chars.len], chars);
 
         return .{
             .buffer = buffer,
@@ -964,11 +905,14 @@ const Lines = struct {
         try self.checkBufferNodeNext(self.currentLine, self.currentBuffer);
 
         const next = self.currentBuffer.next.?;
-        const line = try self.freePool.newLine(next, self.currentLine.data.buffer.last);
+        const line = try self.freePool.newLine();
+
         self.lines.insertAfter(self.currentLine, line);
 
-        self.currentBuffer.next = null;
-        self.currentLine.data.buffer.last = self.currentBuffer;
+        while (self.currentBuffer.next) |n| {
+            self.currentLine.data.buffer.remove(n);
+            line.data.buffer.append(n);
+        }
 
         _ = try self.insertBufferNodeChars(line, next, 0, self.currentBuffer.data.handle[self.cursor.offset..self.currentBuffer.data.len]);
         self.currentBuffer.data.len = @intCast(self.cursor.offset);
@@ -995,27 +939,6 @@ const Lines = struct {
         }
     }
 
-    fn removeLine(self: *Lines) void {
-        const currentLine: ?*LineNode = null;
-
-        if (self.currentLine.next) |line| {
-            currentLine = line;
-        } else if (self.currentLine.prev) |line| {
-            self.cursor.y -= 1;
-            currentLine = line;
-        }
-
-        self.lines.remove(self.currentLine);
-        self.freePool.freeLine(self.currentLine);
-
-        self.currentLine = currentLine orelse self.freePool.newLine();
-        self.currentBuffer = self.currentLine.data.buffer.first;
-
-        self.xOffset = 0;
-        self.cursor.offset = 0;
-        self.cursor.x = 0;
-    }
-
     fn clear(self: *Lines) void {
         defer self.change = true;
         self.cursor.x = 0;
@@ -1030,9 +953,10 @@ const Lines = struct {
             line = l.prev;
         }
 
-        self.lines.append(self.freePool.newLine(null, null) catch unreachable);
-        self.currentLine = self.lines.first.?;
-        self.currentBuffer = self.lines.first.?.data.buffer.first.?;
+        self.currentLine = self.freePool.newLine() catch unreachable;
+        self.currentBuffer = self.freePool.newBuffer() catch unreachable;
+        self.currentLine.data.buffer.append(self.currentBuffer);
+        self.lines.append(self.currentLine);
     }
 
     fn rangeIter(self: *Lines, maxCols: u32, maxRows: u32) RangeIter {
@@ -1045,7 +969,7 @@ const Lines = struct {
             currentLine = currentLine.prev.?;
         }
 
-        return RangeIter {
+        return RangeIter{
             .line = currentLine,
             .buffer = currentLine.data.buffer.first,
             .minX = self.xOffset,
@@ -1072,10 +996,63 @@ const Lines = struct {
     }
 };
 
-const CharSet = struct {
-    textureId: ?u16,
-    advance: u16,
-    bearing: [2]i32,
+const GlyphGenerator = struct {
+    font: FreeType,
+    charIds: Map(u32, ?u16),
+    texture: Texture,
+    count: u32,
+    max: u32,
+    transforms: *Buffer([2]f32).Indexer,
+    size: u32,
+
+    fn init(
+        self: *GlyphGenerator,
+        size: u32,
+        transforms: *Buffer([2]f32).Indexer,
+        maxGlyphs: u32,
+        allocator: Allocator,
+    ) error{Init, OutOfMemory}!void {
+        self.size = size + 2;
+        self.texture = Texture.new(self.size, self.size, maxGlyphs, .r8, .red, .unsigned_byte, .@"2d_array", null);
+        self.font = try FreeType.new("assets/font.ttf", size);
+        self.charIds = Map(u32, ?u16).init(allocator);
+
+        try self.charIds.ensureTotalCapacity((maxGlyphs * 4) / 5);
+
+        self.transforms = transforms;
+        self.max = maxGlyphs;
+        self.count = 0;
+    }
+
+    fn get(self: *GlyphGenerator, code: u32) error{ Max, CharNotFound, OutOfMemory}!?u16 {
+        const set = try self.charIds.getOrPut(code);
+
+        if (!set.found_existing) {
+            if (self.count >= self.max) return error.Max;
+
+            const char = self.font.findChar(code) catch return null;
+
+            if (char.buffer) |b| {
+                defer self.count += 1;
+
+                set.value_ptr.* = @intCast(self.count);
+
+                self.texture.pushData(char.width, char.height, self.count, .red, .unsigned_byte, b);
+
+                const size: i32 = @intCast(self.size);
+                const deltaX: f32 = @floatFromInt(char.bearing[0]);
+                const deltaY: f32 = @floatFromInt((size - char.bearing[1]));
+
+                self.transforms.pushData(self.count, &.{.{ deltaX, -deltaY }});
+            }
+        }
+
+        return set.value_ptr.*;
+    }
+
+    fn deinit(self: *const GlyphGenerator) void {
+        self.texture.deinit();
+    }
 };
 
 const Cursor = struct {
