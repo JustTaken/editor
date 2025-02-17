@@ -771,7 +771,7 @@ const Lines = struct {
         if (buffer.next) |_| {} else {
             if (line.next) |l| {
                 while (l.data.buffer.pop()) |buf| {
-                    line.data.buffer.insertAfter(buffer, buf);
+                    line.data.buffer.append(buf);
                 }
 
                 self.lines.remove(l);
@@ -792,6 +792,16 @@ const Lines = struct {
         if (count == 0) return;
 
         if (count >= buffer.data.len - offset) {
+            if (offset == 0) {
+                self.removeBufferNode(line, buffer);
+
+                if (line.data.buffer.last) |_| {} else {
+                    line.data.buffer.append(self.freePool.newBuffer() catch @panic("TODO"));
+                }
+
+                return;
+            }
+
             const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > buffer.data.len - offset) nextBufferOrJoin else nextBuffer;
 
             var c = count - (buffer.data.len - offset);
@@ -1011,7 +1021,7 @@ const GlyphGenerator = struct {
         transforms: *Buffer([2]f32).Indexer,
         maxGlyphs: u32,
         allocator: Allocator,
-    ) error{Init, OutOfMemory}!void {
+    ) error{ Init, OutOfMemory }!void {
         self.size = size + 2;
         self.texture = Texture.new(self.size, self.size, maxGlyphs, .r8, .red, .unsigned_byte, .@"2d_array", null);
         self.font = try FreeType.new("assets/font.ttf", size);
@@ -1024,7 +1034,7 @@ const GlyphGenerator = struct {
         self.count = 0;
     }
 
-    fn get(self: *GlyphGenerator, code: u32) error{ Max, CharNotFound, OutOfMemory}!?u16 {
+    fn get(self: *GlyphGenerator, code: u32) error{ Max, CharNotFound, OutOfMemory }!?u16 {
         const set = try self.charIds.getOrPut(code);
 
         if (!set.found_existing) {
