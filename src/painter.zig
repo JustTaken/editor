@@ -24,6 +24,11 @@ const IDENTITY = Matrix(4).identity();
 
 const VELOCITY: f32 = 3.0;
 
+const Focus = enum {
+    TextBuffer,
+    CommandLine,
+};
+
 pub const Painter = struct {
     glyphGenerator: GlyphGenerator,
     rectangle: Mesh,
@@ -31,7 +36,7 @@ pub const Painter = struct {
     freePool: FreePool,
 
     lines: [2]Lines,
-    focusedIndex: u32,
+    focus: Focus,
 
     instanceTransforms: Buffer([2]f32).Indexer,
     charTransforms: Buffer([2]f32).Indexer,
@@ -53,8 +58,6 @@ pub const Painter = struct {
     instanceMax: u32,
     totalInstances: u32,
 
-    textureSize: u16,
-
     scale: f32,
     rowChars: u32,
     colChars: u32,
@@ -64,6 +67,8 @@ pub const Painter = struct {
 
     near: f32,
     far: f32,
+
+    textureIndiceStart: u32,
 
     allocator: FixedBufferAllocator,
 
@@ -80,13 +85,14 @@ pub const Painter = struct {
     };
 
     pub fn init(self: *Painter, config: Config) error{ Init, Compile, Read, NotFound, OutOfMemory }!void {
-        self.allocator = FixedBufferAllocator.init(try config.allocator.alloc(u8, 16 * std.mem.page_size));
+        self.allocator = FixedBufferAllocator.init(try config.allocator.alloc(u8, 24 * std.mem.page_size));
 
         self.width = config.width;
         self.height = config.height;
         self.near = config.near;
         self.far = config.far;
         self.scale = config.scale;
+        self.textureIndiceStart = 2;
 
         const allocator = self.allocator.allocator();
 
@@ -111,10 +117,10 @@ pub const Painter = struct {
 
         self.instanceTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null).indexer(config.instanceMax, u16, allocator);
         self.charTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.charKindMax, null).indexer(config.instanceMax, u8, allocator);
-        self.solidTransforms = try Buffer(Matrix(4)).new(.shader_storage_buffer, 1, null).indexer(1, u8, allocator);
+        self.solidTransforms = try Buffer(Matrix(4)).new(.shader_storage_buffer, 2, null).indexer(2, u8, allocator);
         self.depthTransforms = try Buffer(f32).new(.shader_storage_buffer, 2, &.{ 1, 0 }).indexer(config.instanceMax, u8, allocator);
         self.depthTransforms.pushIndex(0, 1);
-        _ = self.depthTransforms.syncIndex(1);
+        _ = self.depthTransforms.syncIndex(config.instanceMax);
 
         self.scaleUniformArray[0] = @floatFromInt(config.size / 2);
         self.scaleUniformArray[1] = config.scale;
@@ -127,17 +133,18 @@ pub const Painter = struct {
         try self.glyphGenerator.init(config.size, &self.charTransforms, config.charKindMax, allocator);
 
         self.instanceMax = config.instanceMax;
+        self.totalInstances = 0;
 
         resize(self, config.width, config.height);
-
-        self.totalInstances = 0;
 
         self.freePool = FreePool.new(FixedBufferAllocator.init(try self.allocator.allocator().alloc(u8, std.mem.page_size)));
 
         self.lines[0] = try Lines.new(&self.freePool);
         self.lines[1] = try Lines.new(&self.freePool);
-        self.focusedIndex = 0;
+        self.focus = .TextBuffer;
+
         self.initCursor();
+        self.initCommandLineBack();
 
         self.instanceTransforms.bind(0, 1);
         self.depthTransforms.bind(2, 3);
@@ -149,13 +156,12 @@ pub const Painter = struct {
     pub fn processCommand(self: *Painter, key: Key) void {
         switch (key) {
             .Enter => {
-                switch (self.focusedIndex) {
-                    0 => self.lines[0].newLine() catch return,
-                    1 => {
+                switch (self.focus) {
+                    .TextBuffer => self.lines[0].newLine() catch return,
+                    .CommandLine => {
                         self.lines[1].clear();
-                        self.focusedIndex = 0;
+                        self.focus = .TextBuffer;
                     },
-                    else => unreachable,
                 }
             },
             else => {},
@@ -179,7 +185,9 @@ pub const Painter = struct {
                 continue;
             }
 
-            self.lines[self.focusedIndex].insertChar(@intCast(i)) catch |e| {
+            const index: u32 = if (self.focus == .TextBuffer) 0 else 1;
+
+            self.lines[index].insertChar(@intCast(i)) catch |e| {
                 std.log.err("Failed to insert {} into the buffer: {}", .{ k, e });
                 continue;
             };
@@ -191,6 +199,8 @@ pub const Painter = struct {
 
         self.width = width;
         self.height = height;
+
+        self.initCommandLineBack();
 
         self.matrixUniformArray[1] = IDENTITY.ortographic(0, @floatFromInt(width), 0, @floatFromInt(height), self.near, self.far);
         self.changes[1] = true;
@@ -247,6 +257,15 @@ pub const Painter = struct {
         self.solidTransforms.pushIndex(indice, scaleId);
     }
 
+    fn initCommandLineBack(self: *Painter) void {
+        const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
+        const widthScale = @as(f32, @floatFromInt(self.width)) / self.scaleUniformArray[0];
+
+        self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 }).translate(.{ 0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })});
+        // self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 });
+        //.translate(.{ -@as(f32, @floatFromInt(self.glyphGenerator.font.width)) / 2.0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })}); //IDENTITY.scale(.{
+    }
+
     fn initCursor(self: *Painter) void {
         const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
         const widthScale = @as(f32, @floatFromInt(self.glyphGenerator.font.width)) / @as(f32, @floatFromInt(self.glyphGenerator.size));
@@ -290,15 +309,8 @@ pub const Painter = struct {
         return flag or count > 0;
     }
 
-    fn checkContentChange(self: *Painter) bool {
-        if (!self.lines[0].change and !self.lines[1].change) return false;
-
-        self.lines[0].change = false;
-        self.lines[1].change = false;
-
-        var iter = self.lines[0].rangeIter(self.rowChars, self.colChars - 1);
-
-        self.resetChars();
+    fn putLines(self: *Painter, lines: *Lines, cols: u32, rows: u32, xOffset: u32, yOffset: u32) void {
+        var iter = lines.rangeIter(cols, rows);
 
         var lineCount: u32 = 0;
         while (iter.hasNextLine()) {
@@ -306,33 +318,33 @@ pub const Painter = struct {
 
             while (iter.nextChars()) |chars| {
                 for (chars) |c| {
-                    self.insertChar(c, charCount, lineCount) catch @panic("failed");
+                    self.insertChar(c, charCount + xOffset, lineCount + yOffset) catch @panic("failed");
                     charCount += 1;
                 }
             }
 
             lineCount += 1;
         }
+    }
 
-        iter = self.lines[1].rangeIter(self.rowChars, 1);
+    fn checkContentChange(self: *Painter) bool {
+        if (!self.lines[0].change and !self.lines[1].change) return false;
 
-        while (iter.hasNextLine()) {
-            var charCount: u32 = 0;
+        self.lines[0].change = false;
+        self.lines[1].change = false;
 
-            while (iter.nextChars()) |chars| {
-                for (chars) |c| {
-                    self.insertChar(c, charCount, self.colChars - 1) catch @panic("failed");
-                    charCount += 1;
-                }
-            }
+        self.resetInstances();
 
-            lineCount += 1;
-        }
+        self.totalInstances += 2;
 
-        const xPos = if (self.focusedIndex == 0) self.lines[0].cursor.x - self.lines[0].xOffset else self.lines[1].cursor.x - self.lines[1].xOffset;
-        const yPos = if (self.focusedIndex == 0) self.lines[0].cursor.y - self.lines[0].yOffset else self.colChars - 1;
+        self.putLines(&self.lines[0], self.rowChars, self.colChars - 1, 0, 0);
+        self.putLines(&self.lines[1], self.rowChars, 1, 0, self.colChars - 1);
+
+        const xPos = if (self.focus == .TextBuffer) self.lines[0].cursor.x - self.lines[0].xOffset else self.lines[1].cursor.x - self.lines[1].xOffset;
+        const yPos = if (self.focus == .TextBuffer) self.lines[0].cursor.y - self.lines[0].yOffset else self.colChars - 1;
 
         self.insertChangeForSolid(0, 0, xPos, yPos);
+        self.insertChangeForSolid(1, 1, 0, self.colChars - 1);
 
         _ = self.instanceTransforms.syncIndex(self.instanceMax);
         _ = self.solidTransforms.syncIndex(1);
@@ -344,8 +356,8 @@ pub const Painter = struct {
     fn processWithModifiers(self: *Painter, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
         _ = altActive;
 
-        switch (self.focusedIndex) {
-            0 => {
+        switch (self.focus) {
+            .TextBuffer => {
                 if (controlActive) {
                     if (keys.contains(.LowerB)) {
                         self.lines[0].moveBack(1);
@@ -376,19 +388,18 @@ pub const Painter = struct {
                     }
 
                     if (keys.contains(.Enter)) {
-                        self.focusedIndex = 1;
-                        self.lines[0].change = true;
+                        self.focus = .CommandLine;
+                        self.lines[1].change = true;
                     }
                 }
             },
-            1 => {},
-            else => unreachable,
+            .CommandLine => {},
         }
     }
 
     fn insertChar(self: *Painter, char: u32, x: u32, y: u32) error{ Max, CharNotFound, OutOfMemory }!void {
         if (try self.glyphGenerator.get(char)) |id| {
-            self.totalInstances += 1;
+            defer self.totalInstances += 1;
             self.insertChangeForTexture(self.totalInstances, id, x, y);
         }
     }
@@ -397,7 +408,7 @@ pub const Painter = struct {
         return @intCast((y * self.rowChars) + x);
     }
 
-    fn resetChars(self: *Painter) void {
+    fn resetInstances(self: *Painter) void {
         self.totalInstances = 0;
     }
 
@@ -406,7 +417,7 @@ pub const Painter = struct {
 
         self.glyphGenerator.texture.bind(self.textureLocation, 0);
 
-        self.rectangle.draw(1, self.totalInstances);
+        self.rectangle.draw(self.textureIndiceStart, self.totalInstances - self.textureIndiceStart);
 
         self.glyphGenerator.texture.unbind(0);
     }
@@ -414,7 +425,7 @@ pub const Painter = struct {
     fn drawCursors(self: *Painter) void {
         self.solidTransforms.bind(4, 5);
 
-        self.rectangle.draw(0, 1);
+        self.rectangle.draw(0, self.textureIndiceStart);
     }
 
     pub fn draw(self: *Painter) void {
