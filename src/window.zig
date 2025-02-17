@@ -62,6 +62,7 @@ pub const Window = struct {
     }
 
     pub fn draw(self: *Window) error{Fail}!void {
+        defer sleep(30);
         const time = std.time.Instant.now() catch return error.Fail;
 
         if (self.display.display.roundtrip() != .SUCCESS) return error.Fail;
@@ -74,11 +75,8 @@ pub const Window = struct {
 
         self.commit() catch return error.Fail;
 
-        sleep(30);
-
         const end = std.time.Instant.now() catch return error.Fail; 
         const elapsed = end.since(time);
-        // _ = elapsed;
         std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
     }
 
