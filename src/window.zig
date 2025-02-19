@@ -9,7 +9,7 @@ const Painter = @import("painter.zig").Painter;
 
 const NEAR: f32 = 1;
 const FAR: f32 = 10;
-const SIZE: u16 = 18;
+const SIZE: u16 = 32;
 const SCALE: f32 = 1.0;
 
 const CHAR_COUNT: u32 = 92;

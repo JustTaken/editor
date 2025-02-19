@@ -801,25 +801,15 @@ const Lines = struct {
 
     fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
         if (count == 0) return;
-
         if (count >= buffer.data.len - offset) {
-            if (offset == 0) {
-                self.removeBufferNode(line, buffer);
-
-                if (line.data.buffer.last) |_| {} else {
-                    line.data.buffer.append(self.freePool.newBuffer() catch @panic("TODO"));
-                }
-
-                return;
-            }
-
             const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > buffer.data.len - offset) nextBufferOrJoin else nextBuffer;
 
             var c = count - (buffer.data.len - offset);
+
             var next = f(self, line, buffer, &c);
 
             while (next) |n| {
-                if (n.data.len > c) break;
+                if (n.data.len >= c) break;
                 c -= @intCast(n.data.len);
 
                 next = f(self, line, n, &c);
