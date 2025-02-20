@@ -7,11 +7,6 @@ pub fn rad(degree: f32) f32 {
     return TO_RAD * degree;
 }
 
-pub const GroupType = enum(u8) {
-    VecF32,
-    MatrixF32,
-};
-
 pub fn Vec(comptime N: u32) type {
     return struct {
         data: [N]f32,
@@ -30,10 +25,6 @@ pub fn Vec(comptime N: u32) type {
 
         pub fn size() u32 {
             return N;
-        }
-
-        pub fn groupType() GroupType {
-            return .VecF32;
         }
 
         pub fn inner() type {
@@ -154,10 +145,6 @@ pub fn Matrix(comptime N: u32) type {
 
         pub fn size() u32 {
             return N;
-        }
-
-        pub fn groupType() GroupType {
-            return .MatrixF32;
         }
 
         pub fn inner() type {

@@ -523,7 +523,7 @@ const Line = struct {
 
         var count: u32 = 0;
         while (buffer) |b| {
-            std.debug.print("{d:0>3} -> [{s}]\n", .{ count, b.data.handle[0..b.data.len] });
+            std.debug.print(" {d:0>3} -> [{s}]\n", .{ count, b.data.handle[0..b.data.len] });
             buffer = b.next;
             count += 1;
         }
@@ -782,7 +782,7 @@ const Lines = struct {
         if (buffer.next) |_| {} else {
             if (line.next) |l| {
                 while (l.data.buffer.pop()) |buf| {
-                    line.data.buffer.append(buf);
+                    line.data.buffer.insertAfter(buffer, buf);
                 }
 
                 self.lines.remove(l);
@@ -800,7 +800,17 @@ const Lines = struct {
     }
 
     fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
-        if (count == 0) return;
+        // std.debug.print("deleting: {}\n", .{count});
+
+        // if (count == 0) return;
+        if (count == 0) {
+            if (offset == 0 and buffer.data.len == 0) {
+                line.data.buffer.remove(buffer);
+            }
+
+            return;
+        }
+
         if (count >= buffer.data.len - offset) {
             const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > buffer.data.len - offset) nextBufferOrJoin else nextBuffer;
 
@@ -809,6 +819,8 @@ const Lines = struct {
             var next = f(self, line, buffer, &c);
 
             while (next) |n| {
+                // std.debug.print("deleting next: {}\n", .{c});
+
                 if (n.data.len >= c) break;
                 c -= @intCast(n.data.len);
 
@@ -818,6 +830,7 @@ const Lines = struct {
 
             if (next) |n| {
                 const nextCount = min(buffer.data.capacity - offset, n.data.len - c);
+                // std.debug.print("next count: {}, len: {}\n", .{nextCount, n.data.len});
 
                 defer buffer.data.len = @intCast(offset + nextCount);
                 std.mem.copyForwards(u8, buffer.data.handle[offset .. offset + nextCount], n.data.handle[c .. c + nextCount]);
@@ -998,11 +1011,13 @@ const Lines = struct {
     fn print(self: *Lines) void {
         var line = self.lines.first;
 
+        var count: u32 = 0;
         while (line) |l| {
+            std.debug.print("{}:\n", .{count});
             l.data.print();
-            std.debug.print("\n", .{});
 
             line = l.next;
+            count += 1;
         }
     }
 };
@@ -1078,4 +1093,41 @@ fn min(first: usize, second: usize) usize {
 
 fn max(first: usize, second: usize) usize {
     return if (first > second) first else second;
+}
+
+test "testing" {
+    var fixedAllocator = FixedBufferAllocator.init(try std.testing.allocator.alloc(u8, 24 * std.mem.page_size));
+    defer std.testing.allocator.free(fixedAllocator.buffer);
+
+    var freePool = FreePool.new(FixedBufferAllocator.init(try fixedAllocator.allocator().alloc(u8, std.mem.page_size)));
+    var lines = try Lines.new(&freePool);
+
+    try lines.insertString("Hellow world");
+    try lines.newLine();
+    try lines.newLine();
+    try lines.insertString("int main() {");
+    try lines.newLine();
+    try lines.insertString("}");
+    lines.moveLineUp(1);
+    lines.lineEnd();
+    try lines.newLine();
+    try lines.insertString("    std.debug.print(\"Hello world\");");
+    try lines.newLine();
+    try lines.insertString("    return 0;");
+
+
+    lines.moveLineUp(2);
+    // lines.moveLineUp(1);
+    lines.lineEnd();
+    try lines.newLine();
+    try lines.newLine();
+    // lines.moveLineUp(2);
+    // try lines.newLine();
+    // lines.moveLineUp(1);
+    lines.print();
+    lines.deleteForward(1);
+    // lines.deleteForward(1);
+
+    lines.print();
+
 }

@@ -16,13 +16,35 @@ pub const OpenGL = struct {
     width: u32,
     height: u32,
 
+    pub const Error = error {
+        EglLoadingExtensions,
+        EglMakeCurrent,
+        EglContext,
+        EglDisplay,
+        EglConfigAttribute,
+        EglMatch,
+        EglCreateConetxt,
+        EglAlloc,
+        EglAttribute,
+        EglConfig,
+        EglAccess,
+        EglFail,
+        EglParameter,
+        EglApi,
+        EglNativeWindow,
+        EglCreatSurface,
+        EglSurfaceAttribute,
+    };
+
+    /// Initializes opengl context with EGL library using the passed wayland
+    /// display and surface.
     pub fn init(
         self: *OpenGL,
         width: u32,
         height: u32,
         display: *wl.Display,
         surface: *wl.Surface,
-    ) !void {
+    ) Error!void {
         self.display = egl.eglGetPlatformDisplay(egl.EGL_PLATFORM_WAYLAND_KHR, display, null);
 
         var eglMajor: egl.EGLint = 0;
@@ -30,11 +52,12 @@ pub const OpenGL = struct {
 
         if (egl.EGL_TRUE != egl.eglInitialize(self.display, &eglMajor, &eglMinor)) {
             switch (egl.eglGetError()) {
-                egl.EGL_BAD_DISPLAY => return error.EglBadDisplay,
-                else => return error.EglFail,
+                egl.EGL_BAD_DISPLAY => return Error.EglDisplay,
+                else => return Error.EglFail,
             }
         }
 
+        // Egl configuration attributes, enabling attributes has to be done here.
         const aglAttributes = [_]egl.EGLint{
             egl.EGL_SURFACE_TYPE,    egl.EGL_WINDOW_BIT,
             egl.EGL_RENDERABLE_TYPE, egl.EGL_OPENGL_BIT,
@@ -53,15 +76,15 @@ pub const OpenGL = struct {
 
         if (egl.EGL_TRUE != egl.eglChooseConfig(self.display, &aglAttributes, &eglConfig, 1, &numConfigs)) {
             switch (egl.eglGetError()) {
-                egl.EGL_BAD_ATTRIBUTE => return error.InvalidEglConfig,
-                else => return error.EglConfig,
+                egl.EGL_BAD_ATTRIBUTE => return Error.EglConfigAttribute,
+                else => return Error.EglConfig,
             }
         }
 
         if (egl.EGL_TRUE != egl.eglBindAPI(egl.EGL_OPENGL_API)) {
             switch (egl.eglGetError()) {
-                egl.EGL_BAD_PARAMETER => return error.OpenGLUnsupported,
-                else => return error.InvalidApi,
+                egl.EGL_BAD_PARAMETER => return Error.EglParameter,
+                else => return Error.EglApi,
             }
         }
 
@@ -71,20 +94,22 @@ pub const OpenGL = struct {
             egl.EGL_NONE,
         };
 
-        self.window = try wl.EglWindow.create(surface, @intCast(width), @intCast(height));
+        self.window = wl.EglWindow.create(surface, @intCast(width), @intCast(height)) catch return Error.EglNativeWindow;
         self.surface = egl.eglCreatePlatformWindowSurface(self.display, eglConfig, self.window, &windowAttributes) orelse switch (egl.eglGetError()) {
-            egl.EGL_BAD_MATCH => return error.MismatchedConfig,
-            egl.EGL_BAD_CONFIG => return error.InvalidConfig,
-            egl.EGL_BAD_NATIVE_WINDOW => return error.InvalidWindow,
-            else => return error.FailedToCreatEglSurface,
+            egl.EGL_BAD_MATCH => return Error.EglMatch,
+            egl.EGL_BAD_CONFIG => return Error.EglConfig,
+            egl.EGL_BAD_NATIVE_WINDOW => return Error.EglNativeWindow,
+            else => return Error.EglCreatSurface,
         };
 
         if (egl.EGL_TRUE != egl.eglSurfaceAttrib(self.display, self.surface, egl.EGL_SWAP_BEHAVIOR, egl.EGL_BUFFER_DESTROYED)) {
             switch (egl.eglGetError()) {
-                else => return error.SetSurfaceAttribute,
+                else => return Error.EglSurfaceAttribute,
             }
         }
 
+        // Specifies the current opengl version, and the core profile to enforce the "new"
+        // opengl api usage
         const contextAttributes = [_]egl.EGLint{
             egl.EGL_CONTEXT_MAJOR_VERSION,       4,
             egl.EGL_CONTEXT_MINOR_VERSION,       6,
@@ -93,33 +118,43 @@ pub const OpenGL = struct {
         };
 
         self.context = egl.eglCreateContext(self.display, eglConfig, egl.EGL_NO_CONTEXT, &contextAttributes) orelse switch (egl.eglGetError()) {
-            egl.EGL_BAD_ATTRIBUTE => return error.InvalidContextAttribute,
-            egl.EGL_BAD_CONFIG => return error.CreateContextWithBadConfig,
-            egl.EGL_BAD_MATCH => return error.UnsupportedConfig,
-            else => return error.FailedToCreateContext,
+            egl.EGL_BAD_ATTRIBUTE => return Error.EglAttribute,
+            egl.EGL_BAD_CONFIG => return Error.EglConfig,
+            egl.EGL_BAD_MATCH => return Error.EglMatch,
+            else => return Error.EglCreateConetxt,
         };
 
         if (egl.eglMakeCurrent(self.display, self.surface, self.surface, self.context) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
-                egl.EGL_BAD_ACCESS => return error.EglThreadError,
-                egl.EGL_BAD_MATCH => return error.MismatchedContextOrSurfaces,
-                egl.EGL_BAD_NATIVE_WINDOW => return error.EglWindowInvalid,
-                egl.EGL_BAD_CONTEXT => return error.InvalidEglContext,
-                egl.EGL_BAD_ALLOC => return error.OutOfMemory,
-                else => return error.FailedToMakeCurrent,
+                egl.EGL_BAD_ACCESS => return Error.EglAccess,
+                egl.EGL_BAD_MATCH => return Error.EglMatch,
+                egl.EGL_BAD_NATIVE_WINDOW => return Error.EglNativeWindow,
+                egl.EGL_BAD_CONTEXT => return Error.EglContext,
+                egl.EGL_BAD_ALLOC => return Error.EglAlloc,
+                else => return Error.EglMakeCurrent,
             }
         }
 
-        try gl.loadExtensions(void, getProcAddress);
+        gl.loadExtensions(void, getProcAddress) catch return Error.EglLoadingExtensions;
 
+        // Enabling debug in my experience has to be a two factor process, first enable the
+        // `debug_output` then enable `debug_output_synchronous`
         gl.enable(.debug_output);
         gl.enable(.debug_output_synchronous);
+
+        // Enable clockwise front face orientation
         gl.enable(.cull_face);
+
         gl.enable(.depth_test);
-        gl.enable(.blend);
         gl.depthFunc(.less_or_equal);
+
+        gl.enable(.blend);
         gl.blendFunc(.src_alpha, .one_minus_src_alpha);
+
+        // Font bitmaps may not be aligned to 4
+        // bytes as opengl might enforce by default
         gl.pixelStore(.unpack_alignment, 1);
+
         gl.debugMessageCallback({}, errorCallback);
 
         self.width = width;
@@ -128,10 +163,12 @@ pub const OpenGL = struct {
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clearDepth(1.0);
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
+        // Opengl is working with double buffering, so the back buffer is the one that the
+        // previous draw calls rendered to, now to show this pixel buffer into the screen
+        // swaping with the current shwoing one is neede.
         if (egl.eglSwapBuffers(self.display, self.surface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_DISPLAY => return error.InvalidDisplay,
@@ -141,9 +178,12 @@ pub const OpenGL = struct {
             }
         }
 
+        // Clear the current back buffer, in other words, the buffer that was beeing display just
+        // before the previous call to eglSwapBuffers, now it is blank.
         gl.clear(.{ .color = true, .depth = true });
     }
 
+    /// Called when window display change the size, so opengl needs to change its scissor and viewport
     pub fn resizeListener(ptr: *anyopaque, width: u32, height: u32) void {
         const self: *OpenGL = @ptrCast(@alignCast(ptr));
 
