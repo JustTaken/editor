@@ -41,7 +41,7 @@ pub const Window = struct {
         height: u32,
         allocator: Allocator,
     ) !void {
-        self.input = Input.new();
+        self.input = try Input.new(allocator);
 
         try self.display.init(self);
 
@@ -78,7 +78,7 @@ pub const Window = struct {
     /// Parallel to that this function performs the drawing of the next frame if the painter
     /// componenet says it has changed, otherwise it just updates the input handler timer.
     pub fn draw(self: *Window) error{Fail}!void {
-        defer sleep(30);
+        defer sleep(60);
         const time = std.time.Instant.now() catch return error.Fail;
 
         if (self.display.display.roundtrip() != .SUCCESS) return error.Fail;

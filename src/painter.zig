@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const EnumSet = std.EnumSet;
 const Map = std.AutoArrayHashMap;
 const ArrayList = std.ArrayList;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
@@ -35,7 +34,8 @@ pub const Painter = struct {
 
     freePool: FreePool,
 
-    lines: [2]Lines,
+    textBuffers: List(Lines),
+    commandLine: Lines,
     focus: Focus,
 
     instanceTransforms: Buffer([2]f32).Indexer,
@@ -83,6 +83,8 @@ pub const Painter = struct {
         charKindMax: u32,
         allocator: Allocator,
     };
+
+    const LinesNode = List(Lines).Node;
 
     pub fn init(self: *Painter, config: Config) error{ Init, Compile, Read, NotFound, OutOfMemory }!void {
         self.allocator = FixedBufferAllocator.init(try config.allocator.alloc(u8, 24 * std.mem.page_size));
@@ -137,10 +139,17 @@ pub const Painter = struct {
 
         resize(self, config.width, config.height);
 
-        self.freePool = FreePool.new(FixedBufferAllocator.init(try self.allocator.allocator().alloc(u8, std.mem.page_size)));
+        self.freePool = FreePool.new(FixedBufferAllocator.init(try allocator.alloc(u8, 2 * std.mem.page_size)));
 
-        self.lines[0] = try Lines.new(&self.freePool);
-        self.lines[1] = try Lines.new(&self.freePool);
+        self.textBuffers = List(Lines) {};
+
+        const currentBuffer = try allocator.create(LinesNode);
+        try currentBuffer.data.init(&self.freePool);
+
+        self.textBuffers.append(currentBuffer);
+
+        try self.commandLine.init(&self.freePool);
+
         self.focus = .TextBuffer;
 
         self.initCursor();
@@ -153,13 +162,46 @@ pub const Painter = struct {
         self.scaleUniforms.bind(2);
     }
 
-    pub fn processCommand(self: *Painter, key: Key) void {
+    pub fn keyListen(ptr: *anyopaque, key: Key, controlActive: bool, altActive: bool) void {
+        const self: *Painter = @ptrCast(@alignCast(ptr));
+
+        if (controlActive or altActive) self.processWithModifiers(key, controlActive, altActive) else self.processKey(key);
+    }
+
+    fn processStringCommand(self: *Painter, string: []const u8) error{Command, Operator, Argument, Execute}!void {
+        var it = std.mem.splitSequence(u8, string, " ");
+        const command = it.next() orelse return error.Command;
+        const operator = it.next() orelse return error.Operator;
+        const argument = it.next() orelse return error.Argument;
+
+        if (!std.mem.eql(u8, command, "open")) return;
+        if (!std.mem.eql(u8, operator, "file")) return;
+
+        const nexTextBuffer = self.allocator.allocator().create(LinesNode) catch return error.Execute;
+        nexTextBuffer.data.fromFile(&self.freePool, argument) catch return error.Execute;
+        self.textBuffers.append(nexTextBuffer);
+    }
+
+    fn processKeyCommand(self: *Painter, key: Key) void {
         switch (key) {
             .Enter => {
                 switch (self.focus) {
-                    .TextBuffer => self.lines[0].newLine() catch return,
+                    .TextBuffer => self.textBuffers.last.?.data.newLine() catch return,
                     .CommandLine => {
-                        self.lines[1].clear();
+                        const allocator = self.allocator.allocator();
+                        const stringCommand = allocator.alloc(u8, 100) catch {
+                            std.log.err("Failed to get command line content", .{});
+                            return;
+                        };
+                        defer allocator.free(stringCommand);
+
+                        const count = self.commandLine.currentLine.data.write(stringCommand);
+                        self.processStringCommand(stringCommand[0..count]) catch |e| {
+                            std.log.err("Failed to execute command, cause: {}", .{e});
+                            return;
+                        };
+
+                        self.commandLine.clear();
                         self.focus = .TextBuffer;
                     },
                 }
@@ -168,30 +210,21 @@ pub const Painter = struct {
         }
     }
 
-    pub fn keyListen(ptr: *anyopaque, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
-        const self: *Painter = @ptrCast(@alignCast(ptr));
+    fn processKey(self: *Painter, key: Key) void {
+        const i: u32 = @intFromEnum(key);
 
-        if (controlActive or altActive) self.processWithModifiers(keys, controlActive, altActive) else self.processKeys(keys);
-    }
-
-    fn processKeys(self: *Painter, keys: *const EnumSet(Key)) void {
-        var iter = keys.iterator();
-
-        while (iter.next()) |k| {
-            const i: u32 = @intFromEnum(k);
-
-            if (i > Key.NON_DISPLAYABLE) {
-                self.processCommand(k);
-                continue;
-            }
-
-            const index: u32 = if (self.focus == .TextBuffer) 0 else 1;
-
-            self.lines[index].insertChar(@intCast(i)) catch |e| {
-                std.log.err("Failed to insert {} into the buffer: {}", .{ k, e });
-                continue;
-            };
+        if (i > Key.NON_DISPLAYABLE) {
+            self.processKeyCommand(key);
+            return;
         }
+
+        const toInsert: *Lines = if (self.focus == .TextBuffer) &self.textBuffers.last.?.data else &self.commandLine;
+
+        toInsert.insertChar(@intCast(i)) catch |e| {
+            std.log.err("Failed to insert {} into the buffer: {}", .{ key, e });
+
+            return;
+        };
     }
 
     fn resize(self: *Painter, width: u32, height: u32) void {
@@ -262,8 +295,6 @@ pub const Painter = struct {
         const widthScale = @as(f32, @floatFromInt(self.width)) / self.scaleUniformArray[0];
 
         self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 }).translate(.{ 0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })});
-        // self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 });
-        //.translate(.{ -@as(f32, @floatFromInt(self.glyphGenerator.font.width)) / 2.0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })}); //IDENTITY.scale(.{
     }
 
     fn initCursor(self: *Painter) void {
@@ -325,23 +356,26 @@ pub const Painter = struct {
 
             lineCount += 1;
         }
+
+        // std.log.info("drawing {} lines, from max: {}", .{lineCount, rows});
     }
 
     fn checkContentChange(self: *Painter) bool {
-        if (!self.lines[0].change and !self.lines[1].change) return false;
+        const textBuffer = &self.textBuffers.last.?.data;
+        if (!textBuffer.change and !self.commandLine.change) return false;
 
-        self.lines[0].change = false;
-        self.lines[1].change = false;
+        textBuffer.change = false;
+        self.commandLine.change = false;
 
         self.resetInstances();
 
         self.totalInstances += 2;
 
-        self.putLines(&self.lines[0], self.rowChars, self.colChars - 1, 0, 0);
-        self.putLines(&self.lines[1], self.rowChars, 1, 0, self.colChars - 1);
+        self.putLines(textBuffer, self.rowChars, self.colChars - 1, 0, 0);
+        self.putLines(&self.commandLine, self.rowChars, 1, 0, self.colChars - 1);
 
-        const xPos = if (self.focus == .TextBuffer) self.lines[0].cursor.x - self.lines[0].xOffset else self.lines[1].cursor.x - self.lines[1].xOffset;
-        const yPos = if (self.focus == .TextBuffer) self.lines[0].cursor.y - self.lines[0].yOffset else self.colChars - 1;
+        const xPos = if (self.focus == .TextBuffer) textBuffer.cursor.x - textBuffer.xOffset else self.commandLine.cursor.x - self.commandLine.xOffset;
+        const yPos = if (self.focus == .TextBuffer) textBuffer.cursor.y - textBuffer.yOffset else self.colChars - 1;
 
         self.insertChangeForSolid(0, 0, xPos, yPos);
         self.insertChangeForSolid(1, 1, 0, self.colChars - 1);
@@ -353,47 +387,38 @@ pub const Painter = struct {
         return true;
     }
 
-    fn processWithModifiers(self: *Painter, keys: *const EnumSet(Key), controlActive: bool, altActive: bool) void {
+    fn processWithModifiers(self: *Painter, key: Key, controlActive: bool, altActive: bool) void {
         _ = altActive;
 
         switch (self.focus) {
             .TextBuffer => {
-                if (controlActive) {
-                    if (keys.contains(.LowerB)) {
-                        self.lines[0].moveBack(1);
-                    }
-
-                    if (keys.contains(.LowerF)) {
-                        self.lines[0].moveFoward(1);
-                    }
-
-                    if (keys.contains(.LowerN)) {
-                        self.lines[0].moveLineDown(1);
-                    }
-
-                    if (keys.contains(.LowerP)) {
-                        self.lines[0].moveLineUp(1);
-                    }
-
-                    if (keys.contains(.LowerD)) {
-                        self.lines[0].deleteForward(1);
-                    }
-
-                    if (keys.contains(.LowerA)) {
-                        self.lines[0].lineStart();
-                    }
-
-                    if (keys.contains(.LowerE)) {
-                        self.lines[0].lineEnd();
-                    }
-
-                    if (keys.contains(.Enter)) {
+                const textBuffer = &self.textBuffers.last.?.data;
+                if (controlActive) switch (key) {
+                    .LowerB => textBuffer.moveBack(1),
+                    .LowerF => textBuffer.moveFoward(1),
+                    .LowerN => textBuffer.moveLineDown(1),
+                    .LowerP => textBuffer.moveLineUp(1),
+                    .LowerD => textBuffer.deleteForward(1),
+                    .LowerA => textBuffer.lineStart(),
+                    .LowerE => textBuffer.lineEnd(),
+                    .LowerS => textBuffer.save() catch return,
+                    .Enter => {
                         self.focus = .CommandLine;
-                        self.lines[1].change = true;
-                    }
-                }
+                        self.commandLine.change = true;
+                    },
+                    else => {},
+                };
             },
-            .CommandLine => {},
+            .CommandLine => {
+                if (controlActive) switch (key) {
+                    .LowerB => self.commandLine.moveBack(1),
+                    .LowerF => self.commandLine.moveFoward(1),
+                    .LowerD => self.commandLine.deleteForward(1),
+                    .LowerA => self.commandLine.lineStart(),
+                    .LowerE => self.commandLine.lineEnd(),
+                    else => {},
+                };
+            },
         }
     }
 
@@ -466,8 +491,11 @@ const RangeIter = struct {
 
     fn hasNextLine(self: *RangeIter) bool {
         if (self.cursor.y >= self.maxY) return false;
+
         const line = self.line orelse return false;
+
         self.cursor.x = 0;
+        self.cursor.y += 1;
         defer self.line = line.next;
 
         self.buffer = line.data.findBufferOffset(&self.cursor, self.minX);
@@ -480,11 +508,7 @@ const RangeIter = struct {
 
         if (self.cursor.x >= self.maxX) return null;
 
-        const buffer = self.buffer orelse {
-            self.cursor.y += 1;
-
-            return null;
-        };
+        const buffer = self.buffer orelse return null;
 
         defer self.cursor.x += buffer.data.len;
         defer self.buffer = buffer.next;
@@ -503,7 +527,6 @@ const LineBuffer = struct {
     handle: [*]u8,
     len: u16,
     capacity: u16,
-    start: u16,
 
     fn init(self: *LineBuffer, allocator: Allocator, size: u32) error{OutOfMemory}!void {
         const handle = try allocator.alloc(u8, size);
@@ -511,12 +534,30 @@ const LineBuffer = struct {
         self.handle = handle.ptr;
         self.capacity = @intCast(handle.len);
         self.len = 0;
-        self.start = 0;
+    }
+
+    fn fromBytes(self: *LineBuffer, bytes: []u8) void {
+        self.handle = bytes.ptr;
+        self.capacity = @intCast(bytes.len);
+        self.len = self.capacity;
     }
 };
 
 const Line = struct {
     buffer: List(LineBuffer),
+
+    fn write(self: *Line, out: []u8) u32 {
+        var buffer = self.buffer.first;
+
+        var count: u32 = 0;
+        while (buffer) |b| {
+            std.mem.copyForwards(u8, out[count..], b.data.handle[0..b.data.len]);
+            buffer = b.next;
+            count += b.data.len;
+        }
+
+        return count;
+    }
 
     fn print(self: *Line) void {
         var buffer = self.buffer.first;
@@ -562,6 +603,37 @@ const FreePool = struct {
             .lines = .{},
             .allocator = allocator,
         };
+    }
+
+    fn bufferFromFile(self: *FreePool, path: []const u8) error{OutOfMemory, CannotHandleThisBig, NotFound}!List(LineBuffer) {
+        const allocator = self.allocator.allocator();
+        const content = std.fs.cwd().readFileAlloc(allocator, path, std.mem.page_size) catch |e| {
+            switch (e) {
+                error.FileTooBig => return error.CannotHandleThisBig,
+                error.FileNotFound => return error.NotFound,
+                else => return error.OutOfMemory,
+            }
+        };
+
+        var list = List(LineBuffer) {};
+
+        var start: u16 = 0;
+        for (content, 0..) |c, i| {
+            if (c == '\n') {
+                const currentBuffer = try allocator.create(BufferNode);
+                currentBuffer.data.fromBytes(content[start..i]);
+                list.append(currentBuffer);
+                start = @intCast(i + 1);
+            }
+        }
+
+        if (start != content.len) {
+            const currentBuffer = try allocator.create(BufferNode);
+            currentBuffer.data.fromBytes(content[start..]);
+            list.append(currentBuffer);
+        }
+
+        return list;
     }
 
     fn newLine(self: *FreePool) error{OutOfMemory}!*LineNode {
@@ -619,22 +691,18 @@ const Lines = struct {
     currentBuffer: *BufferNode,
 
     freePool: *FreePool,
+    name: [100]u8,
+    nameLen: usize,
 
     const BufferNodeWithOffset = struct {
         offset: u32,
         buffer: *BufferNode,
     };
 
-    fn new(freePool: *FreePool) error{OutOfMemory}!Lines {
-        var self: Lines = undefined;
+    const DefaultName = "scratch";
 
-        self.cursor.x = 0;
-        self.cursor.y = 0;
-        self.cursor.offset = 0;
-        self.xOffset = 0;
-        self.yOffset = 0;
-        self.change = true;
-
+    fn init(self: *Lines, freePool: *FreePool) error{OutOfMemory}!void {
+        self.reset();
         self.freePool = freePool;
 
         self.currentLine = try self.freePool.newLine();
@@ -644,7 +712,71 @@ const Lines = struct {
         self.lines = .{};
         self.lines.append(self.currentLine);
 
-        return self;
+        for (DefaultName, 0..) |n, i| {
+            self.name[i] = n;
+        }
+
+        self.nameLen = DefaultName.len;
+    }
+
+    fn fromFile(self: *Lines, freePool: *FreePool, path: []const u8) error{OutOfMemory, NotFound}!void {
+        self.reset();
+        self.freePool = freePool;
+
+        const buffers = self.freePool.bufferFromFile(path) catch return error.NotFound;
+
+        var currentBuffer = buffers.first;
+        while (currentBuffer) |buffer| {
+            currentBuffer = buffer.next;
+
+            const line = try self.freePool.newLine();
+
+            line.data.buffer.append(buffer);
+            self.lines.append(line);
+        }
+
+        self.currentLine = self.lines.first.?;
+        self.currentBuffer = self.currentLine.data.buffer.first.?;
+
+        for (path, 0..) |n, i| {
+            self.name[i] = n;
+        }
+
+        self.nameLen = path.len;
+    }
+
+    fn save(self: *Lines) error{Write, NotFound, OutOfMemory}!void {
+        var line = self.lines.first;
+
+        var allocator = FixedBufferAllocator.init(try self.freePool.allocator.allocator().alloc(u8, std.mem.page_size));
+        const alloc = allocator.allocator();
+        var content = try ArrayList(u8).initCapacity(alloc, 1024);
+
+        while (line) |l| {
+            var buffer = l.data.buffer.first;
+
+            while (buffer) |b| {
+                try content.appendSlice(b.data.handle[0..b.data.len]);
+                buffer = b.next;
+            }
+
+            try content.append('\n');
+
+            line = l.next;
+        }
+
+        const file = std.fs.cwd().createFile(self.name[0..self.nameLen], .{}) catch return error.NotFound;
+        file.writeAll(content.items) catch return error.Write;
+    }
+
+    fn reset(self: *Lines) void {
+        self.cursor.x = 0;
+        self.cursor.y = 0;
+        self.cursor.offset = 0;
+        self.xOffset = 0;
+        self.yOffset = 0;
+        self.change = true;
+        self.lines = .{};
     }
 
     fn moveLineDown(self: *Lines, count: u32) void {
@@ -765,7 +897,23 @@ const Lines = struct {
     fn insertString(self: *Lines, chars: []const u8) error{OutOfMemory}!void {
         defer self.change = true;
 
-        const bufferWithOffset = try self.insertBufferNodeChars(self.currentLine, self.currentBuffer, self.cursor.offset, chars);
+        var count: u32 = 0;
+        for (chars, 0..) |c, i| {
+            if (c == '\n') {
+                _ = try self.insertBufferNodeChars(self.currentLine, self.currentBuffer, self.cursor.offset, chars[count..i]);
+
+                self.currentLine = try self.freePool.newLine();
+                self.currentBuffer = try self.freePool.newBuffer();
+                self.cursor.offset = 0;
+                self.cursor.x = 0;
+
+                count = @intCast(i + 1);
+            }
+        }
+
+        if (count == chars.len) return;
+
+        const bufferWithOffset = try self.insertBufferNodeChars(self.currentLine, self.currentBuffer, self.cursor.offset, chars[count..]);
 
         self.cursor.offset = bufferWithOffset.offset;
         self.currentBuffer = bufferWithOffset.buffer;
@@ -800,9 +948,6 @@ const Lines = struct {
     }
 
     fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
-        // std.debug.print("deleting: {}\n", .{count});
-
-        // if (count == 0) return;
         if (count == 0) {
             if (offset == 0 and buffer.data.len == 0) {
                 line.data.buffer.remove(buffer);
@@ -819,8 +964,6 @@ const Lines = struct {
             var next = f(self, line, buffer, &c);
 
             while (next) |n| {
-                // std.debug.print("deleting next: {}\n", .{c});
-
                 if (n.data.len >= c) break;
                 c -= @intCast(n.data.len);
 
@@ -830,7 +973,6 @@ const Lines = struct {
 
             if (next) |n| {
                 const nextCount = min(buffer.data.capacity - offset, n.data.len - c);
-                // std.debug.print("next count: {}, len: {}\n", .{nextCount, n.data.len});
 
                 defer buffer.data.len = @intCast(offset + nextCount);
                 std.mem.copyForwards(u8, buffer.data.handle[offset .. offset + nextCount], n.data.handle[c .. c + nextCount]);
@@ -965,7 +1107,9 @@ const Lines = struct {
 
     fn clear(self: *Lines) void {
         defer self.change = true;
+
         self.cursor.x = 0;
+        self.cursor.y = 0;
         self.cursor.offset = 0;
 
         var line = self.lines.last;
@@ -1102,7 +1246,7 @@ test "testing" {
     var freePool = FreePool.new(FixedBufferAllocator.init(try fixedAllocator.allocator().alloc(u8, std.mem.page_size)));
     var lines = try Lines.new(&freePool);
 
-    try lines.insertString("Hellow world");
+    try lines.insertString("#include <stdio.h>");
     try lines.newLine();
     try lines.newLine();
     try lines.insertString("int main() {");
@@ -1115,19 +1259,14 @@ test "testing" {
     try lines.newLine();
     try lines.insertString("    return 0;");
 
-
     lines.moveLineUp(2);
-    // lines.moveLineUp(1);
     lines.lineEnd();
+
     try lines.newLine();
     try lines.newLine();
-    // lines.moveLineUp(2);
-    // try lines.newLine();
-    // lines.moveLineUp(1);
+
     lines.print();
     lines.deleteForward(1);
-    // lines.deleteForward(1);
 
     lines.print();
-
 }

@@ -5,6 +5,8 @@ const xkb = @cImport({
 });
 
 const EVDEV_SCANCODE_OFFSET: u32 = 8;
+const ArrayList = std.ArrayList;
+const Allocator = std.mem.Allocator;
 
 const Keys = std.EnumSet(Key);
 
@@ -14,9 +16,12 @@ pub const Xkbcommon = struct {
     state: *xkb.xkb_state,
 
     keys: Keys,
+    last: ?Key,
+
+    keyArray: ArrayList(Key),
 
     listeners: [3]*anyopaque,
-    listenerFns: [3]*const fn (*anyopaque, *const Keys, bool, bool) void,
+    listenerFns: [3]*const fn (*anyopaque, Key, bool, bool) void,
     listenerCount: u32,
 
     controlIndex: u32,
@@ -31,8 +36,10 @@ pub const Xkbcommon = struct {
 
     initialized: bool,
 
-    pub fn new() Xkbcommon {
+    pub fn new(allocator: Allocator) error{OutOfMemory}!Xkbcommon {
         var self: Xkbcommon = undefined;
+
+        self.keyArray = try ArrayList(Key).initCapacity(allocator, 5);
 
         self.keys = Keys.initEmpty();
         self.repeatInfo(20, 200);
@@ -54,9 +61,14 @@ pub const Xkbcommon = struct {
 
         self.time = std.time.milliTimestamp();
         self.initialized = true;
+        self.last = null;
     }
 
     fn resetRepeat(self: *Xkbcommon) void {
+        if (self.working) {
+            self.keyArray.clearRetainingCapacity();
+        }
+
         self.repeating = false;
         self.working = false;
         self.time = std.time.milliTimestamp();
@@ -69,7 +81,7 @@ pub const Xkbcommon = struct {
     }
 
     pub fn tick(self: *Xkbcommon) void {
-        if (self.keys.count() == 0) return;
+        if (self.keys.count() == 0 and self.keyArray.items.len == 0) return;
         const time = std.time.milliTimestamp();
 
         if (!self.repeating) {
@@ -84,13 +96,46 @@ pub const Xkbcommon = struct {
         const controlPressed = self.isControlPressed();
         const altPressed = self.isAltPressed();
 
-        const keys = self.keys;
-        for (0..self.listenerCount) |i| {
-            self.listenerFns[i](self.listeners[i], &keys, controlPressed, altPressed);
+        if (!self.working) {
+            for (self.keyArray.items) |key| {
+                for (0..self.listenerCount) |i| {
+                    self.listenerFns[i](self.listeners[i], key, controlPressed, altPressed);
+                }
+            }
+
+            const last = self.keyArray.pop();
+
+            self.keyArray.clearRetainingCapacity();
+
+            if (self.keys.contains(last)) {
+                self.keyArray.append(last) catch return;
+            }
+        } else {
+            for (0..self.listenerCount) |i| {
+                self.listenerFns[i](self.listeners[i], self.keyArray.getLast(), controlPressed, altPressed);
+            }
         }
+
+
+        // std.debug.print("pressing some keys: {}\n", .{self.keyArray.items.len});
+        // const last = self.keyArray.pop();
+
+        // var iter = self.keys.iterator();
+        // while (iter.next()) |key| {
+        //     for (0..self.listenerCount) |i| {
+        //         self.listenerFns[i](self.listeners[i], key, controlPressed, altPressed);
+        //     }
+
+        //     self.keys.remove(key);
+        //     std.debug.print("{}, ", .{key});
+        // }
+
+        // std.debug.print("inserting: {}\n", .{self.last.?});
+
+        // self.keys.insert(self.last.?);
     }
 
-    pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, *const Keys, bool, bool) void) void {
+    pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, Key, bool, bool) void) void {
         self.listeners[self.listenerCount] = listener;
         self.listenerFns[self.listenerCount] = f;
         self.listenerCount += 1;
@@ -119,6 +164,8 @@ pub const Xkbcommon = struct {
         while (iter.next()) |k| {
             self.keys.remove(k);
         }
+
+        self.last = null;
     }
 
     pub fn handle(self: *Xkbcommon, code: u32, state: wl.Keyboard.KeyState) void {
@@ -138,8 +185,15 @@ pub const Xkbcommon = struct {
         self.resetRepeat();
 
         switch (state) {
-            .pressed => self.keys.insert(key),
-            .released => self.keys.remove(key),
+            .pressed => {
+                self.keyArray.append(key) catch return;
+                // self.last = key;
+                // std.debug.print("last: {}\n", .{key});
+                self.keys.insert(key);
+            },
+            .released => {
+                self.keys.remove(key);
+            },
             _ => {},
         }
     }
