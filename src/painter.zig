@@ -41,7 +41,11 @@ pub const Painter = struct {
     instanceTransforms: Buffer([2]f32).Indexer,
     charTransforms: Buffer([2]f32).Indexer,
     solidTransforms: Buffer(Matrix(4)).Indexer,
+    colorTransforms: Buffer([4]f32).Indexer,
     depthTransforms: Buffer(f32).Indexer,
+
+    baseWidth: f32,
+    baseHeight: f32,
 
     programTexture: Program,
     programNoTexture: Program,
@@ -68,9 +72,15 @@ pub const Painter = struct {
     near: f32,
     far: f32,
 
+    commands: ArrayList(Command),
     textureIndiceStart: u32,
 
-    allocator: FixedBufferAllocator,
+    allocator: *FixedBufferAllocator,
+
+    const Command = struct {
+        name: []const u8,
+        f: *const fn (*Painter, argumens: *std.mem.SplitIterator(u8, .sequence)) void,
+    };
 
     const Config = struct {
         width: u32,
@@ -81,13 +91,13 @@ pub const Painter = struct {
         near: f32,
         far: f32,
         charKindMax: u32,
-        allocator: Allocator,
+        allocator: *FixedBufferAllocator,
     };
 
     const LinesNode = List(Lines).Node;
 
     pub fn init(self: *Painter, config: Config) error{ Init, Compile, Read, NotFound, OutOfMemory }!void {
-        self.allocator = FixedBufferAllocator.init(try config.allocator.alloc(u8, 24 * std.mem.page_size));
+        self.allocator = config.allocator;
 
         self.width = config.width;
         self.height = config.height;
@@ -119,10 +129,15 @@ pub const Painter = struct {
 
         self.instanceTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.instanceMax, null).indexer(config.instanceMax, u16, allocator);
         self.charTransforms = try Buffer([2]f32).new(.shader_storage_buffer, config.charKindMax, null).indexer(config.instanceMax, u8, allocator);
-        self.solidTransforms = try Buffer(Matrix(4)).new(.shader_storage_buffer, 2, null).indexer(2, u8, allocator);
-        self.depthTransforms = try Buffer(f32).new(.shader_storage_buffer, 2, &.{ 1, 0 }).indexer(config.instanceMax, u8, allocator);
+        self.solidTransforms = try Buffer(Matrix(4)).new(.shader_storage_buffer, 20, null).indexer(20, u8, allocator);
+        self.colorTransforms = try Buffer([4]f32).new(.shader_storage_buffer, 3, &.{.{1.0, 1.0, 1.0, 1.0}, .{1.0, 0.0, 0.0, 1.0}, .{0.1, 0.1, 0.3, 1.0}}).indexer(config.instanceMax, u8, allocator);
+        self.depthTransforms = try Buffer(f32).new(.shader_storage_buffer, 2, &.{ 2, 1, 0 }).indexer(config.instanceMax, u8, allocator);
+
         self.depthTransforms.pushIndex(0, 1);
-        _ = self.depthTransforms.syncIndex(config.instanceMax);
+        self.depthTransforms.pushIndex(1, 2);
+
+        self.colorTransforms.pushIndex(1, 2);
+        self.colorTransforms.pushIndex(0, 1);
 
         self.scaleUniformArray[0] = @floatFromInt(config.size / 2);
         self.scaleUniformArray[1] = config.scale;
@@ -139,7 +154,12 @@ pub const Painter = struct {
 
         resize(self, config.width, config.height);
 
-        self.freePool = FreePool.new(FixedBufferAllocator.init(try allocator.alloc(u8, 2 * std.mem.page_size)));
+        self.freePool = FreePool.new(self.allocator);
+        self.commands = try ArrayList(Command).initCapacity(allocator, 20);
+        try self.commands.append(.{
+            .name = "edit",
+            .f = editCommand,
+        });
 
         self.textBuffers = List(Lines) {};
 
@@ -157,9 +177,14 @@ pub const Painter = struct {
 
         self.instanceTransforms.bind(0, 1);
         self.depthTransforms.bind(2, 3);
+        self.colorTransforms.bind(6, 7);
 
         self.matrixUniforms.bind(0);
         self.scaleUniforms.bind(2);
+
+        _ = self.colorTransforms.syncIndex(config.instanceMax);
+        _ = self.depthTransforms.syncIndex(config.instanceMax);
+        _ = self.solidTransforms.syncIndex(2);
     }
 
     pub fn keyListen(ptr: *anyopaque, key: Key, controlActive: bool, altActive: bool) void {
@@ -170,20 +195,60 @@ pub const Painter = struct {
 
     fn processStringCommand(self: *Painter, string: []const u8) error{Command, Operator, Argument, Execute}!void {
         var it = std.mem.splitSequence(u8, string, " ");
-        const command = it.next() orelse return error.Command;
-        const operator = it.next() orelse return error.Operator;
-        const argument = it.next() orelse return error.Argument;
 
-        if (!std.mem.eql(u8, command, "open")) return;
-        if (!std.mem.eql(u8, operator, "file")) return;
+        const command_name = it.next() orelse return error.Command;
 
-        const nexTextBuffer = self.allocator.allocator().create(LinesNode) catch return error.Execute;
-        nexTextBuffer.data.fromFile(&self.freePool, argument) catch return error.Execute;
-        self.textBuffers.append(nexTextBuffer);
+        for (self.commands.items) |command| {
+            if (std.mem.eql(u8, command.name, command_name)) {
+                command.f(self, &it);
+                return;
+            }
+        }
+    }
+
+    fn editCommand(self: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) void {
+        const argument_value = it.next() orelse {
+            std.log.err("missing argument in edit command", .{});
+            return;
+        };
+
+        var buffer = self.textBuffers.first;
+
+        while (buffer) |b| {
+            if (std.mem.eql(u8, b.data.name[0..b.data.nameLen], argument_value)) {
+                self.textBuffers.remove(b);
+                self.textBuffers.append(b);
+
+                return;
+            }
+
+            buffer = b.next;
+        }
+
+        const nextTextBuffer = self.allocator.allocator().create(LinesNode) catch {
+            std.log.err("Out Of memory when opening: {s}", .{argument_value});
+            return;
+        };
+
+        nextTextBuffer.data.fromFile(&self.freePool, argument_value) catch |e| {
+            self.allocator.allocator().destroy(nextTextBuffer);
+
+            std.log.err("Open file: {s}, {}", .{argument_value, e});
+
+            return;
+        };
+
+        self.textBuffers.append(nextTextBuffer);
     }
 
     fn processKeyCommand(self: *Painter, key: Key) void {
         switch (key) {
+            .Escape => {
+                if (self.focus == .CommandLine) {
+                    self.commandLine.clear();
+                    self.focus = .TextBuffer;
+                }
+            },
             .Enter => {
                 switch (self.focus) {
                     .TextBuffer => self.textBuffers.last.?.data.newLine() catch return,
@@ -269,6 +334,7 @@ pub const Painter = struct {
         }
 
         self.instanceTransforms.pushData(0, transforms);
+        self.commandLine.change = true;
     }
 
     pub fn resizeListen(ptr: *anyopaque, width: u32, height: u32) void {
@@ -283,25 +349,26 @@ pub const Painter = struct {
         self.charTransforms.pushIndex(indice, textureId);
     }
 
-    fn insertChangeForSolid(self: *Painter, indice: u32, scaleId: u32, x: u32, y: u32) void {
+    fn insertChangeForSolid(self: *Painter, indice: u32, x: u32, y: u32) void {
         const offset = self.offsetOf(x, y);
 
         self.instanceTransforms.pushIndex(indice, offset);
-        self.solidTransforms.pushIndex(indice, scaleId);
+        self.solidTransforms.pushIndex(indice, indice);
     }
 
     fn initCommandLineBack(self: *Painter) void {
-        const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
         const widthScale = @as(f32, @floatFromInt(self.width)) / self.scaleUniformArray[0];
 
-        self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 }).translate(.{ 0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })});
+        self.solidTransforms.pushData(1, &.{IDENTITY.scale(.{ widthScale, self.baseHeight, 1, 1 }).translate(.{ 0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })});
+        self.solidTransforms.pushIndex(1, 1);
     }
 
     fn initCursor(self: *Painter) void {
-        const heightScale = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
-        const widthScale = @as(f32, @floatFromInt(self.glyphGenerator.font.width)) / @as(f32, @floatFromInt(self.glyphGenerator.size));
+        self.baseHeight = @as(f32, @floatFromInt(@as(i32, @intCast(self.glyphGenerator.font.height)) - @divFloor(self.glyphGenerator.font.descender, 2))) / @as(f32, @floatFromInt(self.glyphGenerator.size));
+        self.baseWidth = @as(f32, @floatFromInt(self.glyphGenerator.font.width)) / @as(f32, @floatFromInt(self.glyphGenerator.size));
+        self.solidTransforms.pushData(0, &.{IDENTITY.scale(.{ self.baseWidth, self.baseHeight, 1, 1 }).translate(.{ -@as(f32, @floatFromInt(self.glyphGenerator.font.width)) / 2.0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })}); //IDENTITY.scale(.{
 
-        self.solidTransforms.pushData(0, &.{IDENTITY.scale(.{ widthScale, heightScale, 1, 1 }).translate(.{ -@as(f32, @floatFromInt(self.glyphGenerator.font.width)) / 2.0, @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0 })}); //IDENTITY.scale(.{
+        self.solidTransforms.pushIndex(0, 0);
     }
 
     pub fn hasChange(self: *Painter) bool {
@@ -343,6 +410,27 @@ pub const Painter = struct {
     fn putLines(self: *Painter, lines: *Lines, cols: u32, rows: u32, xOffset: u32, yOffset: u32) void {
         var iter = lines.rangeIter(cols, rows);
 
+        const selections = iter.getSelections(self.allocator.allocator()) catch {
+            std.log.err("Failed to get selections", .{});
+
+            return;
+        };
+
+
+        if (selections) |slcs| {
+            for (slcs) |selection| {
+                const widthScale: f32 = @floatFromInt(selection.count);
+
+                const width = self.baseWidth * widthScale;
+
+                self.solidTransforms.pushData(self.totalInstances, &.{IDENTITY.scale(.{ width, self.baseHeight, 1, 1 }).translate(.{width * @as(f32, @floatFromInt(self.glyphGenerator.size)), @floatFromInt(@divFloor(self.glyphGenerator.font.descender, 2)), 0.0})});
+
+                self.insertChangeForSolid(self.totalInstances, selection.x, selection.y);
+                self.totalInstances += 1;
+                self.textureIndiceStart += 1;
+            }
+        }
+
         var lineCount: u32 = 0;
         while (iter.hasNextLine()) {
             var charCount: u32 = 0;
@@ -356,8 +444,6 @@ pub const Painter = struct {
 
             lineCount += 1;
         }
-
-        // std.log.info("drawing {} lines, from max: {}", .{lineCount, rows});
     }
 
     fn checkContentChange(self: *Painter) bool {
@@ -369,20 +455,18 @@ pub const Painter = struct {
 
         self.resetInstances();
 
-        self.totalInstances += 2;
-
         self.putLines(textBuffer, self.rowChars, self.colChars - 1, 0, 0);
         self.putLines(&self.commandLine, self.rowChars, 1, 0, self.colChars - 1);
 
         const xPos = if (self.focus == .TextBuffer) textBuffer.cursor.x - textBuffer.xOffset else self.commandLine.cursor.x - self.commandLine.xOffset;
         const yPos = if (self.focus == .TextBuffer) textBuffer.cursor.y - textBuffer.yOffset else self.colChars - 1;
 
-        self.insertChangeForSolid(0, 0, xPos, yPos);
-        self.insertChangeForSolid(1, 1, 0, self.colChars - 1);
+        self.insertChangeForSolid(0, xPos, yPos);
+        self.insertChangeForSolid(1, 0, self.colChars - 1);
 
         _ = self.instanceTransforms.syncIndex(self.instanceMax);
-        _ = self.solidTransforms.syncIndex(1);
         _ = self.charTransforms.syncIndex(self.instanceMax);
+        _ = self.solidTransforms.syncIndex(self.textureIndiceStart);
 
         return true;
     }
@@ -398,10 +482,11 @@ pub const Painter = struct {
                     .LowerF => textBuffer.moveFoward(1),
                     .LowerN => textBuffer.moveLineDown(1),
                     .LowerP => textBuffer.moveLineUp(1),
-                    .LowerD => textBuffer.deleteForward(1),
+                    .LowerD => textBuffer.deleteForward(1) catch return,
                     .LowerA => textBuffer.lineStart(),
                     .LowerE => textBuffer.lineEnd(),
                     .LowerS => textBuffer.save() catch return,
+                    .Space => textBuffer.toggleSelection(),
                     .Enter => {
                         self.focus = .CommandLine;
                         self.commandLine.change = true;
@@ -413,7 +498,7 @@ pub const Painter = struct {
                 if (controlActive) switch (key) {
                     .LowerB => self.commandLine.moveBack(1),
                     .LowerF => self.commandLine.moveFoward(1),
-                    .LowerD => self.commandLine.deleteForward(1),
+                    .LowerD => self.commandLine.deleteForward(1) catch return,
                     .LowerA => self.commandLine.lineStart(),
                     .LowerE => self.commandLine.lineEnd(),
                     else => {},
@@ -434,7 +519,8 @@ pub const Painter = struct {
     }
 
     fn resetInstances(self: *Painter) void {
-        self.totalInstances = 0;
+        self.totalInstances = 2;
+        self.textureIndiceStart = 2;
     }
 
     fn drawChars(self: *Painter) void {
@@ -482,12 +568,91 @@ const RangeIter = struct {
     line: ?*LineNode,
     cursor: Cursor,
 
+    variableLine: ?*LineNode,
+
+    selection: ?Cursor,
+    lineCursor: Cursor,
+
     minX: u32,
     minY: u32,
     maxX: u32,
     maxY: u32,
 
-    const zero: [2]u8 = .{ 0, 0 };
+    const SelectionRange = struct {
+        y: u32,
+        x: u32,
+        count: u32,
+    };
+
+    fn getSelections(self: *RangeIter, allocator: Allocator) error{OutOfMemory}!?[]SelectionRange {
+        const selection = self.selection orelse return null;
+
+        const order = Cursor.order(self.lineCursor, selection);
+        const selections = try allocator.alloc(SelectionRange, order[1].y - order[0].y + 1);
+
+        if (order[0].y == order[1].y) {
+            if (order[1].x < self.minX) return null;
+            if (order[1].y < self.minY) return null;
+
+            selections[0].x = @intCast(max(order[0].x, self.minX) - self.minX);
+            selections[0].y = order[0].y - self.minY;
+            selections[0].count = @intCast(min(self.maxX, order[1].x) - self.minX - selections[0].x);
+
+            return selections;
+        } else {
+            var currentLine: ?*LineNode = lineFromCount(self.line.?, order[0].y, self.cursor.y);
+            var start: u32 = order[0].x;
+            for (order[0].y..order[1].y) |i| {
+                const line = currentLine.?;
+                const len = lineLen(line);
+
+                if (self.maxX >= len) continue;
+
+                start = @intCast(max(start, self.minX));
+                const end = min(len, self.maxX);
+
+                selections[i] = .{
+                    .x = start - self.minX,
+                    .y = @intCast(order[0].y + i - self.minY),
+                    .count = @intCast(end - start),
+                };
+
+                start = 0;
+                currentLine = line.next;
+            }
+
+            const len = lineLen(currentLine.?);
+            selections[order[1].y - order[0].y] = .{
+                .x = 0,
+                .y = order[1].y - self.minY,
+                .count = @intCast(min(self.maxX, len)),
+            };
+
+            return selections;
+        }
+    }
+
+    fn lineFromCount(line: *LineNode, y: u32, currentY: u32) *LineNode {
+        if (y < currentY) {
+            return lineFromCount(line.prev.?, y, y - 1);
+        } else if (y > currentY) {
+            return lineFromCount(line.next.?, y, y + 1);
+        } else {
+            return line;
+        }
+    }
+
+    fn lineLen(line: *LineNode) u32 {
+        var buffer = line.data.buffer.first;
+        var count: u32 = 0;
+
+        while (buffer) |b| {
+            count += b.data.len;
+            buffer = b.next;
+        }
+
+        return count;
+    }
 
     fn hasNextLine(self: *RangeIter) bool {
         if (self.cursor.y >= self.maxY) return false;
@@ -595,9 +760,9 @@ const FreePool = struct {
     buffers: List(LineBuffer),
     lines: List(Line),
 
-    allocator: FixedBufferAllocator,
+    allocator: *FixedBufferAllocator,
 
-    fn new(allocator: FixedBufferAllocator) FreePool {
+    fn new(allocator: *FixedBufferAllocator) FreePool {
         return .{
             .buffers = .{},
             .lines = .{},
@@ -607,7 +772,8 @@ const FreePool = struct {
 
     fn bufferFromFile(self: *FreePool, path: []const u8) error{OutOfMemory, CannotHandleThisBig, NotFound}!List(LineBuffer) {
         const allocator = self.allocator.allocator();
-        const content = std.fs.cwd().readFileAlloc(allocator, path, std.mem.page_size) catch |e| {
+        std.log.err("from file before: {} {}", .{self.allocator.end_index, self.allocator.buffer.len});
+        const content = std.fs.cwd().readFileAlloc(allocator, path, 16 * std.mem.page_size) catch |e| {
             switch (e) {
                 error.FileTooBig => return error.CannotHandleThisBig,
                 error.FileNotFound => return error.NotFound,
@@ -622,6 +788,7 @@ const FreePool = struct {
             if (c == '\n') {
                 const currentBuffer = try allocator.create(BufferNode);
                 currentBuffer.data.fromBytes(content[start..i]);
+
                 list.append(currentBuffer);
                 start = @intCast(i + 1);
             }
@@ -629,9 +796,12 @@ const FreePool = struct {
 
         if (start != content.len) {
             const currentBuffer = try allocator.create(BufferNode);
+
             currentBuffer.data.fromBytes(content[start..]);
             list.append(currentBuffer);
         }
+
+        std.log.err("from file after: {} {}", .{self.allocator.end_index, self.allocator.buffer.len});
 
         return list;
     }
@@ -643,7 +813,10 @@ const FreePool = struct {
             return line;
         }
 
-        const line = try self.allocator.allocator().create(LineNode);
+        const line = self.allocator.allocator().create(LineNode) catch {
+            std.log.err("failed to create line Node, usage: {}, total: {}", .{self.allocator.end_index, self.allocator.buffer.len});
+            return error.OutOfMemory;
+        };
 
         line.data.buffer = .{};
 
@@ -679,6 +852,7 @@ const FreePool = struct {
 
 const Lines = struct {
     cursor: Cursor,
+    selection: ?Cursor,
 
     yOffset: u32,
     xOffset: u32,
@@ -719,11 +893,11 @@ const Lines = struct {
         self.nameLen = DefaultName.len;
     }
 
-    fn fromFile(self: *Lines, freePool: *FreePool, path: []const u8) error{OutOfMemory, NotFound}!void {
+    fn fromFile(self: *Lines, freePool: *FreePool, path: []const u8) error{OutOfMemory, CannotHandleThisBig, NotFound}!void {
         self.reset();
         self.freePool = freePool;
 
-        const buffers = self.freePool.bufferFromFile(path) catch return error.NotFound;
+        const buffers = self.freePool.bufferFromFile(path) catch return error.CannotHandleThisBig;
 
         var currentBuffer = buffers.first;
         while (currentBuffer) |buffer| {
@@ -776,6 +950,7 @@ const Lines = struct {
         self.xOffset = 0;
         self.yOffset = 0;
         self.change = true;
+        self.selection = null;
         self.lines = .{};
     }
 
@@ -920,10 +1095,10 @@ const Lines = struct {
         self.cursor.x += @intCast(chars.len);
     }
 
-    fn deleteForward(self: *Lines, count: u32) void {
+    fn deleteForward(self: *Lines, count: u32) error{OutOfMemory}!void {
         defer self.change = true;
 
-        self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count);
+        try self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count);
     }
 
     fn nextBufferOrJoin(self: *Lines, line: *LineNode, buffer: *BufferNode, count: *u32) ?*BufferNode {
@@ -947,45 +1122,48 @@ const Lines = struct {
         return buffer.next;
     }
 
-    fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) void {
-        if (count == 0) {
-            if (offset == 0 and buffer.data.len == 0) {
-                line.data.buffer.remove(buffer);
+    fn deleteBufferNodeCount(self: *Lines, line: *LineNode, buffer: *BufferNode, offset: u32, count: u32) error{OutOfMemory}!void {
+        if (count >= buffer.data.len - offset) {
+            var current = buffer;
+
+            if (offset == 0 and count == buffer.data.len) {
+                if (buffer != self.currentBuffer) {
+                    try self.removeBufferNode(line, buffer);
+                }
+
+                buffer.data.len = 0;
+
+                return;
             }
 
-            return;
-        }
+            const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > current.data.len - offset) nextBufferOrJoin else nextBuffer;
 
-        if (count >= buffer.data.len - offset) {
-            const f: *const fn (*Lines, *LineNode, *BufferNode, *u32) ?*BufferNode = if (count > buffer.data.len - offset) nextBufferOrJoin else nextBuffer;
-
-            var c = count - (buffer.data.len - offset);
-
-            var next = f(self, line, buffer, &c);
+            var c = count - (current.data.len - offset);
+            var next = f(self, line, current, &c);
 
             while (next) |n| {
                 if (n.data.len >= c) break;
                 c -= @intCast(n.data.len);
 
                 next = f(self, line, n, &c);
-                self.removeBufferNode(line, n);
+                try self.removeBufferNode(line, n);
             }
 
             if (next) |n| {
-                const nextCount = min(buffer.data.capacity - offset, n.data.len - c);
+                const nextCount = min(current.data.capacity - offset, n.data.len - c);
 
-                defer buffer.data.len = @intCast(offset + nextCount);
-                std.mem.copyForwards(u8, buffer.data.handle[offset .. offset + nextCount], n.data.handle[c .. c + nextCount]);
+                defer current.data.len = @intCast(offset + nextCount);
+                std.mem.copyForwards(u8, current.data.handle[offset .. offset + nextCount], n.data.handle[c .. c + nextCount]);
 
-                self.deleteBufferNodeCount(line, n, 0, @intCast(c + nextCount));
+                try self.deleteBufferNodeCount(line, n, 0, @intCast(c + nextCount));
             } else {
-                buffer.data.len = @intCast(offset);
+                current.data.len = @intCast(offset);
             }
         } else {
             std.mem.copyForwards(u8, buffer.data.handle[offset .. buffer.data.len - count], buffer.data.handle[offset + count .. buffer.data.len]);
 
             if (buffer.data.len == buffer.data.capacity) {
-                self.deleteBufferNodeCount(line, buffer, buffer.data.len - count, count);
+                try self.deleteBufferNodeCount(line, buffer, buffer.data.len - count, count);
             } else {
                 buffer.data.len -= @intCast(count);
             }
@@ -1029,9 +1207,14 @@ const Lines = struct {
         };
     }
 
-    fn removeBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode) void {
+    fn removeBufferNode(self: *Lines, line: *LineNode, buffer: *BufferNode) error{OutOfMemory}!void {
         line.data.buffer.remove(buffer);
         self.freePool.freeBuffer(buffer);
+
+        if (line.data.buffer.last) |_| {
+        } else {
+            line.data.buffer.append(try self.freePool.newBuffer());
+        }
     }
 
     fn checkBufferNodeNext(self: *Lines, line: *LineNode, buffer: *BufferNode) error{OutOfMemory}!void {
@@ -1091,6 +1274,15 @@ const Lines = struct {
         self.cursor.y += 1;
     }
 
+    fn toggleSelection(self: *Lines) void {
+        defer self.change = true;
+        if (self.selection) |_| {
+            self.selection = null;
+        } else {
+            self.selection = self.cursor;
+        }
+    }
+
     fn checkCursor(self: *Lines, maxCols: u32, maxRows: u32) void {
         if (self.cursor.x >= maxCols + self.xOffset) {
             self.xOffset = self.cursor.x - maxCols + 1;
@@ -1115,10 +1307,10 @@ const Lines = struct {
         var line = self.lines.last;
 
         while (line) |l| {
+            line = l.prev;
+
             self.lines.remove(l);
             self.freePool.freeLine(l);
-
-            line = l.prev;
         }
 
         self.currentLine = self.freePool.newLine() catch unreachable;
@@ -1139,6 +1331,9 @@ const Lines = struct {
 
         return RangeIter{
             .line = currentLine,
+            .variableLine = currentLine,
+            .lineCursor = self.cursor,
+            .selection = self.selection,
             .buffer = currentLine.data.buffer.first,
             .minX = self.xOffset,
             .minY = self.yOffset,
@@ -1229,6 +1424,26 @@ const Cursor = struct {
     x: u32,
     y: u32,
     offset: u32,
+
+    fn order(first: Cursor, second: Cursor) [2]Cursor {
+        var tuple: [2]Cursor = .{first, second};
+
+        if (first.y > second.y) {
+            tuple[0] = second;
+            tuple[1] = first;
+        } else if (first.y < second.y) {
+            tuple[0] = first;
+            tuple[1] = second;
+        } else if (first.x > second.x) {
+            tuple[1] = first;
+            tuple[0] = second;
+        } else if (first.x < second.x) {
+            tuple[0] = first;
+            tuple[1] = second;
+        }
+
+        return tuple;
+    }
 };
 
 fn min(first: usize, second: usize) usize {
@@ -1240,11 +1455,22 @@ fn max(first: usize, second: usize) usize {
 }
 
 test "testing" {
-    var fixedAllocator = FixedBufferAllocator.init(try std.testing.allocator.alloc(u8, 24 * std.mem.page_size));
+    var fixedAllocator = FixedBufferAllocator.init(try std.testing.allocator.alloc(u8, 2 * 1024 * std.mem.page_size));
     defer std.testing.allocator.free(fixedAllocator.buffer);
 
-    var freePool = FreePool.new(FixedBufferAllocator.init(try fixedAllocator.allocator().alloc(u8, std.mem.page_size)));
-    var lines = try Lines.new(&freePool);
+    var freePool = FreePool.new(FixedBufferAllocator.init(try fixedAllocator.allocator().alloc(u8, 2 * 1024 * std.mem.page_size)));
+    var lines: Lines = undefined;
+    try lines.init(&freePool);
+
+    const Behavior = enum {
+        InsertString,
+        NextLine,
+        NewLine,
+        PrevLine,
+        CharBack,
+        CharForward,
+        DeleteChar,
+    };
 
     try lines.insertString("#include <stdio.h>");
     try lines.newLine();
@@ -1252,8 +1478,10 @@ test "testing" {
     try lines.insertString("int main() {");
     try lines.newLine();
     try lines.insertString("}");
+
     lines.moveLineUp(1);
     lines.lineEnd();
+
     try lines.newLine();
     try lines.insertString("    std.debug.print(\"Hello world\");");
     try lines.newLine();
@@ -1264,9 +1492,27 @@ test "testing" {
 
     try lines.newLine();
     try lines.newLine();
+    lines.moveLineUp(10);
 
-    lines.print();
-    lines.deleteForward(1);
+    try lines.deleteForward(1);
+
+    var pcg = std.Random.Pcg.init(0);
+    var random = pcg.random();
+    const string = "Hello world";
+    for (0..100000) |i| {
+        const rand = random.enumValue(Behavior);
+        std.debug.print("{} -> {}\n", .{i, rand});
+
+        switch (rand) {
+            .InsertString => try lines.insertString(string),
+            .NextLine => lines.moveLineDown(1),
+            .PrevLine => lines.moveLineUp(1),
+            .CharBack => lines.moveBack(1),
+            .CharForward => lines.moveFoward(1),
+            .DeleteChar => try lines.deleteForward(1),
+            .NewLine => try lines.newLine(),
+        }
+    }
 
     lines.print();
 }

@@ -6,10 +6,10 @@ const Input = @import("input.zig").Xkbcommon;
 const Renderer = @import("opengl/root.zig").OpenGL;
 const Display = @import("wayland.zig").Wayland;
 const Painter = @import("painter.zig").Painter;
-
+const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 const NEAR: f32 = 1;
 const FAR: f32 = 10;
-const SIZE: u16 = 32;
+const SIZE: u16 = 24;
 const SCALE: f32 = 1.0;
 
 const CHAR_COUNT: u32 = 92;
@@ -39,9 +39,9 @@ pub const Window = struct {
         self: *Window,
         width: u32,
         height: u32,
-        allocator: Allocator,
+        allocator: *FixedBufferAllocator,
     ) !void {
-        self.input = try Input.new(allocator);
+        self.input = try Input.new(allocator.allocator());
 
         try self.display.init(self);
 
@@ -93,9 +93,9 @@ pub const Window = struct {
 
         const end = std.time.Instant.now() catch return error.Fail; 
         const elapsed = end.since(time);
-        _ = elapsed;
+        // _ = elapsed;
 
-        // std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
+        std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
     }
 
     /// Meat to be a wayland wrapper around the commit action and prior to the commit it performs the

@@ -3,6 +3,7 @@ let
 in
 pkgs.mkShell {
   packages = with pkgs; [
+    (callPackage "/home/joao/.local/share/projects/builds/kak" {})
     helix
     git
     zig
@@ -21,7 +22,6 @@ pkgs.mkShell {
     freetype
     gdb
     renderdoc
-    emacs30-pgtk
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.libGL}/lib:${pkgs.libxkbcommon}/lib:${pkgs.freetype}/lib";

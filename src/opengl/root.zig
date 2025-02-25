@@ -162,7 +162,7 @@ pub const OpenGL = struct {
 
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clearColor(224.0 / 255.0, 122.0 / 255.0, 95.0 / 255.0, 1.0);
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {

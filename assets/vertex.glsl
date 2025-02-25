@@ -25,7 +25,15 @@ layout(std430, binding = 4) readonly buffer CharTransform {
 };
 
 layout(std430, binding = 5) readonly buffer CharTransformIndex {
-    uint charTransformIndices[]; // TODO: For now this array does not uses index 0, because it is indexed by the same variable as instanceTransformIndices and instanceScaleIndices. The variable in the second shader "rawVertex.glsl" the instanceScaleIndices comes first and for now uses index 0;
+    uint charTransformIndices[];
+};
+
+layout(std430, binding = 6) readonly buffer ColorTransform {
+    vec4 colorTransforms[];
+};
+
+layout(std430, binding = 7) readonly buffer ColorTransformIndex {
+    uint colorTransformIndices[];
 };
 
 layout (binding = 2) uniform Scale {
@@ -39,6 +47,7 @@ layout (binding = 0) uniform Matrix {
 };
 
 out Vertex {
+    vec4 outColor;
     vec2 outTexture;
     flat int textureIndex;
 };
@@ -47,6 +56,7 @@ void main() {
     int instanceId = gl_InstanceID + gl_BaseInstance;
     int instanceIndice = int(int(instanceTransformIndices[instanceId / 2]) >> (16 * (instanceId % 2))) & 0xFFFF;
     int textureIndice = int(int(charTransformIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
+    int colorIndice = int(int(colorTransformIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
     int depthIndice = int(int(instanceDepthIndices[instanceId / 4]) >> (8 * (instanceId % 4))) & 0xFF;
 
     mat4 transform = mat4(1.0);
@@ -67,4 +77,5 @@ void main() {
 
     outTexture = vTexture;
     textureIndex = textureIndice;
+    outColor = colorTransforms[colorIndice];
 }
