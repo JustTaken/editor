@@ -139,7 +139,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, data: *Wayland) v
         .modifiers => |m| data.window.input.mask(m.mods_depressed, m.mods_latched, m.mods_locked, m.group),
         .repeat_info => |i| data.window.input.repeatInfo(i.rate, i.delay),
         .enter => |_| {},
-        .leave => |_| data.window.input.leave(),
+        .leave => |_| data.window.input.reset(),
         .keymap => |k| {
             defer std.posix.close(k.fd);
 

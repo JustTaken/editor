@@ -8,14 +8,14 @@ const EVDEV_SCANCODE_OFFSET: u32 = 8;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
-const Keys = std.EnumSet(Key);
+// const Keys = std.EnumSet(Key);
 
 pub const Xkbcommon = struct {
     context: *xkb.xkb_context,
     keymap: *xkb.xkb_keymap,
     state: *xkb.xkb_state,
 
-    keys: Keys,
+    // keys: Keys,
     last: ?Key,
 
     keyArray: ArrayList(Key),
@@ -32,21 +32,20 @@ pub const Xkbcommon = struct {
 
     time: isize,
     repeating: bool,
-    working: bool,
+    // working: bool,
 
     initialized: bool,
 
     pub fn new(allocator: Allocator) error{OutOfMemory}!Xkbcommon {
         var self: Xkbcommon = undefined;
 
-        self.keyArray = try ArrayList(Key).initCapacity(allocator, 5);
+        self.keyArray = try ArrayList(Key).initCapacity(allocator, 10);
 
-        self.keys = Keys.initEmpty();
+        self.last = null;
         self.repeatInfo(20, 200);
-        self.repeating = false;
-        self.working = false;
-        self.initialized = false;
         self.listenerCount = 0;
+        self.initialized = false;
+        self.repeating = false;
 
         return self;
     }
@@ -61,78 +60,42 @@ pub const Xkbcommon = struct {
 
         self.time = std.time.milliTimestamp();
         self.initialized = true;
-        self.last = null;
     }
 
-    fn resetRepeat(self: *Xkbcommon) void {
-        if (self.working) {
-            self.keyArray.clearRetainingCapacity();
+    fn repeat(self: *Xkbcommon) void {
+        const time = std.time.milliTimestamp();
+
+        if (self.last) |last| {
+            if (time >= self.time + self.rate) {
+                if (!(self.repeating or time >= self.time + self.delay)) return;
+
+                self.repeating = true;
+                self.broadcast(last, self.isControlPressed(), self.isAltPressed(), time);
+            }
+        }
+    }
+
+    fn broadcast(self: *Xkbcommon, key: Key, controlPressed: bool, altPressed: bool, time: isize) void {
+        for (0..self.listenerCount) |i| {
+            self.listenerFns[i](self.listeners[i], key, controlPressed, altPressed);
         }
 
-        self.repeating = false;
-        self.working = false;
-        self.time = std.time.milliTimestamp();
-
-        var iter = self.keys.iterator();
-
-        while (iter.next()) |k| {
-            self.keys.remove(k);
-        }
+        self.time = time;
     }
 
     pub fn tick(self: *Xkbcommon) void {
-        if (self.keys.count() == 0 and self.keyArray.items.len == 0) return;
-        const time = std.time.milliTimestamp();
+        if (self.keyArray.items.len > 0) {
+            const time = std.time.milliTimestamp();
 
-        if (!self.repeating) {
-            if (time >= self.time + self.delay) self.repeating = true;
-        }
+            const controlPressed = self.isControlPressed();
+            const altPressed = self.isAltPressed();
 
-        if (self.working and !(self.repeating and time >= self.time + self.rate)) return;
-
-        self.time = time;
-        self.working = true;
-
-        const controlPressed = self.isControlPressed();
-        const altPressed = self.isAltPressed();
-
-        if (!self.working) {
             for (self.keyArray.items) |key| {
-                for (0..self.listenerCount) |i| {
-                    self.listenerFns[i](self.listeners[i], key, controlPressed, altPressed);
-                }
+                self.broadcast(key, controlPressed, altPressed, time);
             }
-
-            const last = self.keyArray.pop();
 
             self.keyArray.clearRetainingCapacity();
-
-            if (self.keys.contains(last)) {
-                self.keyArray.append(last) catch return;
-            }
-        } else {
-            for (0..self.listenerCount) |i| {
-                self.listenerFns[i](self.listeners[i], self.keyArray.getLast(), controlPressed, altPressed);
-            }
-        }
-
-
-        // std.debug.print("pressing some keys: {}\n", .{self.keyArray.items.len});
-        // const last = self.keyArray.pop();
-
-        // var iter = self.keys.iterator();
-        // while (iter.next()) |key| {
-        //     for (0..self.listenerCount) |i| {
-        //         self.listenerFns[i](self.listeners[i], key, controlPressed, altPressed);
-        //     }
-
-        //     self.keys.remove(key);
-        //     std.debug.print("{}, ", .{key});
-        // }
-
-        // std.debug.print("inserting: {}\n", .{self.last.?});
-
-        // self.keys.insert(self.last.?);
+        } else self.repeat();
     }
 
     pub fn newListener(self: *Xkbcommon, listener: *anyopaque, f: *const fn (*anyopaque, Key, bool, bool) void) void {
@@ -158,14 +121,9 @@ pub const Xkbcommon = struct {
         return xkb.xkb_state_mod_index_is_active(self.state, self.altIndex, xkb.XKB_STATE_LAYOUT_EFFECTIVE) != 0;
     }
 
-    pub fn leave(self: *Xkbcommon) void {
-        var iter = self.keys.iterator();
-
-        while (iter.next()) |k| {
-            self.keys.remove(k);
-        }
-
+    pub fn reset(self: *Xkbcommon) void {
         self.last = null;
+        self.repeating = false;
     }
 
     pub fn handle(self: *Xkbcommon, code: u32, state: wl.Keyboard.KeyState) void {
@@ -182,18 +140,14 @@ pub const Xkbcommon = struct {
         };
 
         if (xkb.xkb_keymap_key_repeats(self.keymap, code + EVDEV_SCANCODE_OFFSET) == 0) return;
-        self.resetRepeat();
 
+        self.reset();
         switch (state) {
             .pressed => {
                 self.keyArray.append(key) catch return;
-                // self.last = key;
-                // std.debug.print("last: {}\n", .{key});
-                self.keys.insert(key);
+                self.last = key;
             },
-            .released => {
-                self.keys.remove(key);
-            },
+            .released => {},
             _ => {},
         }
     }
