@@ -10,8 +10,10 @@ const Shader = @import("opengl/shader.zig").Shader;
 const Buffer = @import("opengl/buffer.zig").Buffer;
 const Mesh = @import("opengl/mesh.zig").Mesh;
 const Lines = @import("lines.zig").Lines;
+const Popup = @import("lines.zig").Popup;
 const FreePool = @import("lines.zig").FreePool;
 const CharInfo = @import("lines.zig").CharInfo;
+const Iter = @import("lines.zig").CharIter;
 const GlyphGenerator = @import("lines.zig").GlyphGenerator;
 
 const Matrix = @import("math.zig").Matrix;
@@ -27,6 +29,13 @@ const Focus = enum {
     CommandLine,
 };
 
+const LinesNode = List(Lines).Node;
+
+const Command = struct {
+    name: []const u8,
+    f: *const fn (*Painter, argumens: *std.mem.SplitIterator(u8, .sequence)) void,
+};
+
 pub const Painter = struct {
     glyphGenerator: GlyphGenerator,
     rectangle: Mesh,
@@ -35,6 +44,7 @@ pub const Painter = struct {
 
     textBuffers: List(Lines),
     commandLine: Lines,
+    popup: Popup,
     focus: Focus,
 
     colorTransforms: Buffer([4]f32),
@@ -47,7 +57,6 @@ pub const Painter = struct {
     uniforms: Buffer(Matrix(4)),
     uniformChange: bool,
 
-    cursorPosition: [2]u32,
     cursorScale: Matrix(4),
     commandLineBackScale: Matrix(4),
 
@@ -63,14 +72,9 @@ pub const Painter = struct {
     near: f32,
     far: f32,
 
-    commands: ArrayList(Command),
+    commandHandler: CommandHandler,
 
     allocator: *FixedBufferAllocator,
-
-    const Command = struct {
-        name: []const u8,
-        f: *const fn (*Painter, argumens: *std.mem.SplitIterator(u8, .sequence)) void,
-    };
 
     const Config = struct {
         width: u32,
@@ -82,8 +86,6 @@ pub const Painter = struct {
         charKindMax: u32,
         allocator: *FixedBufferAllocator,
     };
-
-    const LinesNode = List(Lines).Node;
 
     pub fn init(self: *Painter, config: Config) error{ Init, Compile, Read, NotFound, OutOfMemory }!void {
         self.allocator = config.allocator;
@@ -124,22 +126,18 @@ pub const Painter = struct {
 
         try self.glyphGenerator.init(config.size, config.charKindMax, allocator);
         self.resize(config.width, config.height);
-        self.cursorPosition = .{0, 0};
 
         self.freePool = FreePool.new(self.allocator);
-        self.commands = try ArrayList(Command).initCapacity(allocator, 20);
-        try self.commands.append(.{
-            .name = "edit",
-            .f = editCommand,
-        });
-
         self.textBuffers = List(Lines) {};
 
         const currentBuffer = try allocator.create(LinesNode);
+
         try currentBuffer.data.init(&self.freePool);
         try self.commandLine.init(&self.freePool);
+        try self.popup.init(allocator);
 
         self.textBuffers.append(currentBuffer);
+        self.commandHandler = try CommandHandler.new(&.{.{ .name = "edit", .f = editCommand }}, allocator);
 
         self.focus = .TextBuffer;
 
@@ -155,68 +153,12 @@ pub const Painter = struct {
         if (controlActive or altActive) self.processWithModifiers(key, controlActive, altActive) else self.processKey(key);
     }
 
-    fn processCommandString(self: *Painter, string: []const u8) error{Command, Operator, Argument, Execute}!void {
-        var it = std.mem.splitSequence(u8, string, " ");
-
-        const command_name = it.next() orelse return error.Command;
-
-        for (self.commands.items) |command| {
-            if (std.mem.eql(u8, command.name, command_name)) {
-                command.f(self, &it);
-                return;
-            }
-        }
-    }
-
-    fn editCommand(self: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) void {
-        const argument_value = it.next() orelse {
-            std.log.err("missing argument in edit command", .{});
-            return;
-        };
-
-        var buffer = self.textBuffers.first;
-
-        while (buffer) |b| {
-            if (std.mem.eql(u8, b.data.name[0..b.data.nameLen], argument_value)) {
-                self.textBuffers.remove(b);
-                self.textBuffers.append(b);
-
-                return;
-            }
-
-            buffer = b.next;
-        }
-
-        const nextTextBuffer = self.allocator.allocator().create(LinesNode) catch {
-            std.log.err("Out Of memory when opening: {s}", .{argument_value});
-            return;
-        };
-
-        nextTextBuffer.data.fromFile(&self.freePool, argument_value) catch |e| {
-            self.allocator.allocator().destroy(nextTextBuffer);
-
-            std.log.err("Open file: {s}, {}", .{argument_value, e});
-
-            return;
-        };
-
-        self.textBuffers.append(nextTextBuffer);
-    }
-
     fn processKeyCommand(self: *Painter, key: Key) void {
         switch (key) {
-            .ArrowRight => {
-                self.updateView(self.uniforms.array.items[0].translate(.{-10.0, 0, 0}));
-            },
-            .ArrowLeft => {
-                self.updateView(self.uniforms.array.items[0].translate(.{10.0, 0, 0}));
-            },
-            .ArrowUp => {
-                self.updateView(self.uniforms.array.items[0].translate(.{0, 10, 0}));
-            },
-            .ArrowDown => {
-                self.updateView(self.uniforms.array.items[0].translate(.{0, 10, 0}));
-            },
+            .ArrowRight => self.updateView(self.uniforms.array.items[0].translate(.{-10.0, 0, 0})),
+            .ArrowLeft => self.updateView(self.uniforms.array.items[0].translate(.{10.0, 0, 0})),
+            .ArrowUp => self.updateView(self.uniforms.array.items[0].translate(.{0, -10, 0})),
+            .ArrowDown => self.updateView(self.uniforms.array.items[0].translate(.{0, 10, 0})),
             .Escape => {
                 if (self.focus == .CommandLine) {
                     self.commandLine.clear();
@@ -227,18 +169,17 @@ pub const Painter = struct {
                 switch (self.focus) {
                     .TextBuffer => self.textBuffers.last.?.data.newLine() catch return,
                     .CommandLine => {
-                        const allocator = self.allocator.allocator();
-                        const stringCommand = allocator.alloc(u8, 100) catch {
-                            std.log.err("Failed to get command line content", .{});
-                            return;
-                        };
-                        defer allocator.free(stringCommand);
+                        // const allocator = self.allocator.allocator();
+                        // const stringCommand = allocator.alloc(u8, 100) catch {
+                        //     std.log.err("Failed to get command line content", .{});
+                        //     return;
+                        // };
+                        // defer allocator.free(stringCommand);
 
-                        const count = self.commandLine.currentLine.data.write(stringCommand);
-                        self.processCommandString(stringCommand[0..count]) catch |e| {
-                            std.log.err("Failed to execute command, cause: {}", .{e});
-                            return;
-                        };
+                        // self.processCommandString(stringCommand[0..count]) catch |e| {
+                        //     std.log.err("Failed to execute command, cause: {}", .{e});
+                        //     return;
+                        // };
 
                         self.commandLine.clear();
                         self.focus = .TextBuffer;
@@ -258,16 +199,28 @@ pub const Painter = struct {
             return;
         }
 
-        const toInsert = switch (self.focus) {
-            .TextBuffer => &self.textBuffers.last.?.data,
-            else => &self.commandLine,
-        };
+        switch (self.focus) {
+            .TextBuffer => self.textBuffers.last.?.data.insertChar(@intCast(i)) catch return,
+            .CommandLine => self.writeToCommandLine(i) catch return,
+        }
+    }
 
-        toInsert.insertChar(@intCast(i)) catch |e| {
-            std.log.err("Failed to insert {} into the buffer: {}", .{ key, e });
+    fn writeToCommandLine(self: *Painter, char: u32) error{OutOfMemory}!void {
+        try self.commandLine.insertChar(@intCast(char));
 
-            return;
-        };
+        var content: [100]u8 = undefined;
+
+        const command = self.commandLine.currentLine.data.write(&content);
+        try self.commandHandler.updateCandidates(command);
+
+        self.popup.reset();
+
+        for (self.commandHandler.candidates.items) |candidate| {
+            try self.popup.insert(candidate.name);
+            // std.debug.print("inserting, {s}\n", .{candidate.name});
+        }
+
+        // self.popup.print();
     }
 
     fn resize(self: *Painter, width: u32, height: u32) void {
@@ -282,9 +235,9 @@ pub const Painter = struct {
         const float_width: f32 = @floatFromInt(self.width);
         const float_height: f32 = @floatFromInt(self.height);
 
-        self.glyphGenerator.defaultTransform = IDENTITY.scale(.{size, size, 1, 1}).translate(.{font_width, -(font_height / 2), 1}); // @WARNING font_width do not reflect the right size of every char, it is just the bounding box of a maximun char size, so this x translation is wrong
-        self.cursorScale = IDENTITY.scale(.{font_width, font_height, 1, 1}).translate(.{font_width / 2, -(font_height / 2), 1});
-        self.commandLineBackScale = IDENTITY.scale(.{float_width, font_height, 1, 1}).translate(.{float_width / 2, font_height / 2 - float_height, 2});
+        self.glyphGenerator.defaultTransform = IDENTITY.scale(.{size, size, 1, 1}).translate(.{font_width, -(font_height / 2), 0}); // @WARNING font_width do not reflect the right size of every char, it is just the bounding box of a maximun char size, so this x translation is wrong
+        self.cursorScale = IDENTITY.scale(.{font_width, font_height, 1, 1}).translate(.{font_width / 2, -(font_height / 2), 0});
+        self.commandLineBackScale = IDENTITY.scale(.{float_width, font_height, 1, 1}).translate(.{float_width / 2, font_height / 2 - float_height, 0.5});
 
         self.updateView(IDENTITY);
         self.updateProjection(IDENTITY.ortographic(0, float_width, 0, float_height, 0, 10.0));
@@ -332,20 +285,39 @@ pub const Painter = struct {
         return true;
     }
 
-    fn putLines(self: *Painter, lines: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32) error{ Max, CharNotFound, OutOfMemory }!Matrix(4) {
-        var iter = lines.rangeIter(width, height, xOffset, yOffset, zOffset, &self.glyphGenerator) orelse return error.Max;
-
+    fn putCharIter(self: *Painter, iter: Iter) error{ OutOfMemory }!void {
         var infoArray: [100]CharInfo = undefined;
-        while (iter.nextLine(&infoArray)) |infos| {
+
+        while (iter.next(&infoArray)) |infos| {
             for (infos) |i| {
                 try self.insertChar(i, .{1, 1, 1, 1});
             }
         }
-
-        return iter.cursorTransform;
     }
 
-    fn checkContentChange(self: *Painter) error{ Max, CharNotFound, OutOfMemory }!bool {
+    // fn putLines(self: *Painter, buffer: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, generator: *GlyphGenerator) error{ Max, OutOfMemory }!Matrix(4) {
+    //     var iter = lines.iter(width, height, xOffset, yOffset, zOffset, generator);
+
+    //     return iter.getCursor();
+    // }
+
+    // fn putPopup(self: *Painter, buffer: *Popup, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) error{Max, OutOfMemory}!void {
+    //     var iter = lines.iter(width, height, xOffset, yOffset, zOffset, perLine, generator);
+
+    //     while (iter.next(&infoArray)) |infos| {
+    //         for (infos) |i| {
+    //             try self.insertChar(i, .{1, 1, 1, 1});
+    //         }
+    //     }
+    // }
+
+    // fn putLinesWithCursor(self: *Popup, buffer: anytype, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, generator: *GlyphGenerator) error{ Max, CharNotFound, OutOfMemory }!void {
+    // // fn putLinesWithCursor(self: *Painter, iter: anytype) error{ Max, CharNotFound, OutOfMemory }!Matrix(4) {
+    //     try self.putLines(buffer, width, height, xOffset, yOffset, zOffset, generator);
+    //     return iter.getCursor();
+    // }
+
+    fn checkContentChange(self: *Painter) error{ OutOfMemory }!bool {
         const textBuffer = &self.textBuffers.last.?.data;
         if (!textBuffer.change and !self.commandLine.change) return false;
 
@@ -354,10 +326,23 @@ pub const Painter = struct {
 
         self.resetInstances();
 
-        const bufferCursorTransform = try self.putLines(textBuffer, self.width, self.height - self.glyphGenerator.font.height, 0, 0, 0);
-        const commandLineCursorTransform = try self.putLines(&self.commandLine, self.width, self.glyphGenerator.font.height, 0, -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)), 2);
+        try self.putCharIter(textBuffer.iter(self.width, self.height - self.glyphGenerator.font.height, 0, 0, 0, &self.glyphGenerator));
+        try self.putCharIter(self.commandLine.iter(self.width, self.glyphGenerator.font.height, 0, -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)), 1, &self.glyphGenerator));
 
-        const cursorTransform = if (self.focus == .TextBuffer) bufferCursorTransform else commandLineCursorTransform;
+        var cursorTransform: Matrix(4) = undefined;
+
+        switch (self.focus) {
+            .TextBuffer => cursorTransform = textBuffer.iterHandler.getCursor(),
+            .CommandLine => {
+                cursorTransform = self.commandLine.iterHandler.getCursor();
+
+                if (self.popup.blocks.items.len > 0) {
+                    const height = (self.popup.lines(4) + 1) * self.glyphGenerator.font.height;
+                    try self.putCharIter(self.popup.iter(self.width, height, 0, -@as(i32, @intCast(self.height - height)), 1, 4, &self.glyphGenerator));
+                    // std.debug.print("puting in\n", .{});
+                }
+            }
+        }
 
         try self.insertInstance(cursorTransform.mult(self.cursorScale), .{1, 1, 0.0, 1});
         try self.insertInstance(self.commandLineBackScale, .{0.5, 0.5, 0.5, 1});
@@ -408,7 +393,7 @@ pub const Painter = struct {
         }
     }
 
-    fn insertChar(self: *Painter, info: CharInfo, color: [4]f32) error{ Max, CharNotFound, OutOfMemory }!void {
+    fn insertChar(self: *Painter, info: CharInfo, color: [4]f32) error{ OutOfMemory }!void {
         if (info.id) |id| {
             defer self.charCount += 1;
 
@@ -458,3 +443,69 @@ pub const Painter = struct {
         self.programNoTexture.deinit();
     }
 };
+
+const CommandHandler = struct {
+    commands: ArrayList(Command),
+    candidates: ArrayList(Command),
+    index: u32,
+
+    fn new(commands: []const Command, allocator: Allocator) error{OutOfMemory}!CommandHandler {
+        var self: CommandHandler = undefined;
+
+        self.candidates = try ArrayList(Command).initCapacity(allocator, commands.len);
+        self.commands = try ArrayList(Command).initCapacity(allocator, commands.len);
+        try self.commands.appendSlice(commands);
+        self.index = 0;
+
+        return self;
+    }
+
+    fn updateCandidates(self: *CommandHandler, string: []const u8) error{OutOfMemory}!void {
+        self.clear();
+
+        for (self.commands.items) |cmd| {
+            if (std.mem.startsWith(u8, cmd.name, string)) {
+                try self.candidates.append(cmd);
+            }
+        }
+    }
+
+    fn clear(self: *CommandHandler) void {
+        self.candidates.clearRetainingCapacity();
+    }
+};
+
+fn editCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) void {
+    const argument_value = it.next() orelse {
+        std.log.err("missing argument in edit command", .{});
+        return;
+    };
+
+    var buffer = painter.textBuffers.first;
+
+    while (buffer) |b| {
+        if (std.mem.eql(u8, b.data.name[0..b.data.nameLen], argument_value)) {
+            painter.textBuffers.remove(b);
+            painter.textBuffers.append(b);
+
+            return;
+        }
+
+        buffer = b.next;
+    }
+
+    const nextTextBuffer = painter.allocator.allocator().create(LinesNode) catch {
+        std.log.err("Out Of memory when opening: {s}", .{argument_value});
+        return;
+    };
+
+    nextTextBuffer.data.fromFile(&painter.freePool, argument_value) catch |e| {
+        painter.allocator.allocator().destroy(nextTextBuffer);
+
+        std.log.err("Open file: {s}, {}", .{argument_value, e});
+
+        return;
+    };
+
+    painter.textBuffers.append(nextTextBuffer);
+}

@@ -13,151 +13,6 @@ const Texture = @import("opengl/texture.zig").Texture;
 
 const IDENTITY = Matrix(4).identity();
 
-pub const RangeIter = struct {
-    line: ?*LineNode,
-
-    cursor: Cursor,
-
-    currentYOffset: u32,
-
-    startYOffset: u32,
-    startXOffset: u32,
-
-    xPosOffset: i32,
-    yPosOffset: i32,
-    zPosOffset: i32,
-
-    width: u32,
-    height: u32,
-
-    cursorTransform: Matrix(4),
-    generator: *GlyphGenerator,
-
-    fn new(
-        width: u32,
-        height: u32,
-        prevXOffset: *u32,
-        prevYOffset: *u32,
-        xPosOffset: i32,
-        yPosOffset: i32,
-        zPosOffset: i32,
-        cursor: Cursor,
-        currentLine: *LineNode,
-        generator: *GlyphGenerator,
-    ) ?RangeIter {
-        const yPosRange = cursor.y * generator.font.height;
-        var yOffset = prevYOffset.*;
-
-        while (yOffset + height < yPosRange + generator.font.height) {
-            yOffset += generator.font.height;
-        }
-
-        while (yOffset > yPosRange) {
-            yOffset -= generator.font.height;
-        }
-
-        var colCount: u32 = 0;
-        var xPosRange: u32 = 0;
-
-        var currentBuffer: ?*BufferNode = currentLine.data.buffer.first;
-        outer: while (currentBuffer) |b| {
-            for (b.data.handle[0..b.data.len]) |c| {
-                if (colCount >= cursor.x) break :outer;
-
-                const info = generator.get(c) catch return null;
-
-                xPosRange += info.advance;
-                colCount += 1;
-            }
-
-            currentBuffer = b.next;
-        }
-
-        currentBuffer = currentLine.data.buffer.first;
-        var xOffset: u32 = prevXOffset.*;
-
-        if (xOffset > xPosRange) {
-            xOffset = xPosRange;
-        }
-
-        outer: while (currentBuffer) |b| {
-            for (b.data.handle[0..b.data.len]) |c| {
-                if (xOffset + width > xPosRange) break :outer;
-
-                const info = generator.get(c) catch return null;
-                xOffset += info.advance;
-            }
-
-            currentBuffer = b.next;
-        }
-
-        var line = currentLine;
-        var lineIndex = cursor.y;
-        const lineIndexStart = yOffset / generator.font.height;
-
-        while (lineIndex > lineIndexStart) {
-            line = line.prev orelse return null;
-            lineIndex -= 1;
-        }
-
-        const cursorTransform = IDENTITY.translate(.{@floatFromInt(@as(i32, @intCast(xPosRange - xOffset)) + xPosOffset), @as(f32, @floatFromInt(-@as(i32, @intCast(yPosRange - yOffset)) + yPosOffset)), @floatFromInt(zPosOffset)});
-
-        prevYOffset.* = yOffset;
-        prevXOffset.* = xOffset;
-
-        return .{
-            .width = width,
-            .height = height,
-            .line = line,
-            .cursor = cursor,
-            .currentYOffset = yOffset,
-            .startYOffset = yOffset,
-            .startXOffset = xOffset,
-            .xPosOffset = xPosOffset,
-            .yPosOffset = yPosOffset,
-            .zPosOffset = zPosOffset,
-            .cursorTransform = cursorTransform,
-            .generator = generator,
-        };
-    }
-
-    pub fn nextLine(self: *RangeIter, infos: []CharInfo) ?[]CharInfo {
-        if (self.currentYOffset >= self.height + self.startYOffset) return null;
-
-        const line = self.line orelse return null;
-
-        defer self.line = line.next;
-        defer self.currentYOffset += self.generator.font.height;
-
-        const y = @as(i32, @intCast(self.currentYOffset)) - @as(i32, @intCast(self.startYOffset));
-
-        var currentBuffer: ?*BufferNode = line.data.buffer.first;
-        var xOffset: i32 = 0;
-        var len: u32 = 0;
-
-        outer: while (currentBuffer) |b| {
-            for (b.data.handle[0..b.data.len]) |c| {
-                if (xOffset >= self.width + self.startXOffset) break :outer;
-
-                var info = self.generator.get(c) catch return null;
-
-                const x = @as(i32, @intCast(xOffset)) - @as(i32, @intCast(self.startXOffset));
-
-                info.transform = info.transform.translate(.{@floatFromInt(x + self.xPosOffset), @floatFromInt(-y + self.yPosOffset), @floatFromInt(self.zPosOffset)});
-                xOffset += @intCast(info.advance);
-
-                infos[len] = info;
-
-                len += @intFromBool(xOffset >= self.startXOffset);
-            }
-
-            currentBuffer = b.next;
-        }
-
-        return infos[0..len];
-    }
-};
-
 const LineBuffer = struct {
     handle: [*]u8,
     len: u16,
@@ -181,7 +36,7 @@ const LineBuffer = struct {
 const Line = struct {
     buffer: List(LineBuffer),
 
-    pub fn write(self: *Line, out: []u8) u32 {
+    pub fn write(self: *Line, out: []u8) []u8 {
         var buffer = self.buffer.first;
 
         var count: u32 = 0;
@@ -191,11 +46,11 @@ const Line = struct {
             count += b.data.len;
         }
 
-        return count;
+        return out[0..count];
     }
 
 
-    fn print(self: *Line) void {
+    pub fn print(self: *Line) void {
         var buffer = self.buffer.first;
 
         var count: u32 = 0;
@@ -321,6 +176,159 @@ pub const Lines = struct {
     name: [100]u8,
     nameLen: usize,
 
+    iterHandler: Iter,
+
+    pub const Iter = struct {
+        line: ?*LineNode,
+
+        cursor: Cursor,
+
+        currentYOffset: u32,
+
+        startYOffset: u32,
+        startXOffset: u32,
+
+        xPosOffset: i32,
+        yPosOffset: i32,
+        zPosOffset: i32,
+
+        width: u32,
+        height: u32,
+
+        cursorTransform: Matrix(4),
+        generator: *GlyphGenerator,
+
+        fn new(
+            width: u32,
+            height: u32,
+            prevXOffset: *u32,
+            prevYOffset: *u32,
+            xPosOffset: i32,
+            yPosOffset: i32,
+            zPosOffset: i32,
+            cursor: Cursor,
+            currentLine: *LineNode,
+            generator: *GlyphGenerator,
+        ) ?Iter {
+            const yPosRange = cursor.y * generator.font.height;
+            var yOffset = prevYOffset.*;
+
+            while (yOffset + height < yPosRange + generator.font.height) {
+                yOffset += generator.font.height;
+            }
+
+            while (yOffset > yPosRange) {
+                yOffset -= generator.font.height;
+            }
+
+            var colCount: u32 = 0;
+            var xPosRange: u32 = 0;
+
+            var currentBuffer: ?*BufferNode = currentLine.data.buffer.first;
+            outer: while (currentBuffer) |b| {
+                for (b.data.handle[0..b.data.len]) |c| {
+                    if (colCount >= cursor.x) break :outer;
+
+                    const info = generator.get(c) catch return null;
+
+                    xPosRange += info.advance;
+                    colCount += 1;
+                }
+
+                currentBuffer = b.next;
+            }
+
+            currentBuffer = currentLine.data.buffer.first;
+            var xOffset: u32 = prevXOffset.*;
+
+            if (xOffset > xPosRange) {
+                xOffset = xPosRange;
+            }
+
+            outer: while (currentBuffer) |b| {
+                for (b.data.handle[0..b.data.len]) |c| {
+                    if (xOffset + width > xPosRange) break :outer;
+
+                    const info = generator.get(c) catch return null;
+                    xOffset += info.advance;
+                }
+
+                currentBuffer = b.next;
+            }
+
+            var line = currentLine;
+            var lineIndex = cursor.y;
+            const lineIndexStart = yOffset / generator.font.height;
+
+            while (lineIndex > lineIndexStart) {
+                line = line.prev orelse return null;
+                lineIndex -= 1;
+            }
+
+            const cursorTransform = IDENTITY.translate(.{@floatFromInt(@as(i32, @intCast(xPosRange - xOffset)) + xPosOffset), @as(f32, @floatFromInt(-@as(i32, @intCast(yPosRange - yOffset)) + yPosOffset)), @floatFromInt(zPosOffset)});
+
+            prevYOffset.* = yOffset;
+            prevXOffset.* = xOffset;
+
+            return .{
+                .width = width,
+                .height = height,
+                .line = line,
+                .cursor = cursor,
+                .currentYOffset = yOffset,
+                .startYOffset = yOffset,
+                .startXOffset = xOffset,
+                .xPosOffset = xPosOffset,
+                .yPosOffset = yPosOffset,
+                .zPosOffset = zPosOffset,
+                .cursorTransform = cursorTransform,
+                .generator = generator,
+            };
+        }
+
+        pub fn next(ptr: *anyopaque, infos: []CharInfo) ?[]CharInfo {
+            const self: *Iter = @ptrCast(@alignCast(ptr));
+
+            if (self.currentYOffset >= self.height + self.startYOffset) return null;
+
+            const line = self.line orelse return null;
+
+            defer self.line = line.next;
+            defer self.currentYOffset += self.generator.font.height;
+
+            const y = @as(i32, @intCast(self.currentYOffset)) - @as(i32, @intCast(self.startYOffset));
+
+            var currentBuffer: ?*BufferNode = line.data.buffer.first;
+            var xOffset: i32 = 0;
+            var len: u32 = 0;
+
+            outer: while (currentBuffer) |b| {
+                for (b.data.handle[0..b.data.len]) |c| {
+                    if (xOffset >= self.width + self.startXOffset) break :outer;
+
+                    var info = self.generator.get(c) catch return null;
+
+                    const x = @as(i32, @intCast(xOffset)) - @as(i32, @intCast(self.startXOffset));
+
+                    info.transform = info.transform.translate(.{@floatFromInt(x + self.xPosOffset), @floatFromInt(-y + self.yPosOffset), @floatFromInt(self.zPosOffset)});
+                    xOffset += @intCast(info.advance);
+
+                    infos[len] = info;
+
+                    len += @intFromBool(xOffset >= self.startXOffset);
+                }
+
+                currentBuffer = b.next;
+            }
+
+            return infos[0..len];
+        }
+
+        pub fn getCursor(self: Iter) Matrix(4) {
+            return self.cursorTransform;
+        }
+    };
+
     const BufferNodeWithOffset = struct {
         offset: u32,
         buffer: *BufferNode,
@@ -354,12 +362,12 @@ pub const Lines = struct {
 
         var currentBuffer = buffers.first;
         while (currentBuffer) |buffer| {
-            currentBuffer = buffer.next;
-
             const line = try self.freePool.newLine();
 
             line.data.buffer.append(buffer);
             self.lines.append(line);
+
+            currentBuffer = buffer.next;
         }
 
         self.currentLine = self.lines.first.?;
@@ -755,12 +763,7 @@ pub const Lines = struct {
         self.cursor.y = 0;
         self.cursor.offset = 0;
 
-        var line = self.lines.last;
-
-        while (line) |l| {
-            line = l.prev;
-
-            self.lines.remove(l);
+        while (self.lines.pop()) |l| {
             self.freePool.freeLine(l);
         }
 
@@ -770,8 +773,8 @@ pub const Lines = struct {
         self.lines.append(self.currentLine);
     }
 
-    pub fn rangeIter(self: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, generator: *GlyphGenerator) ?RangeIter {
-        return RangeIter.new(
+    pub fn iter(self: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, generator: *GlyphGenerator) CharIter {
+        self.iterHandler = Iter.new(
             width,
             height,
             &self.xOffset,
@@ -782,10 +785,15 @@ pub const Lines = struct {
             self.cursor,
             self.currentLine,
             generator,
-        );
+        ) orelse @panic("TODO");
+
+        return .{
+            .ptr = &self.iterHandler,
+            .nextFn = Iter.next,
+        };
     }
 
-    fn print(self: *Lines) void {
+    pub fn print(self: *Lines) void {
         var line = self.lines.first;
 
         var count: u32 = 0;
@@ -799,11 +807,131 @@ pub const Lines = struct {
     }
 };
 
+pub const Popup = struct {
+    blocks: ArrayList(Block),
+    index: u32,
+
+    bytes: []u8,
+    len: u32,
+
+    iterHandler: Iter,
+
+    pub const Iter = struct {
+        blocks: []Block,
+        index: u32,
+
+        width: u32,
+        height: u32,
+
+        xOffset: i32,
+        yOffset: i32,
+        zOffset: i32,
+
+        perLine: u32,
+
+        selected: ?u32,
+
+        generator: *GlyphGenerator,
+
+        fn new(blocks: []Block, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) Iter {
+            return .{
+                .blocks = blocks,
+                .generator = generator,
+                .width = width,
+                .height = height,
+                .xOffset = xOffset,
+                .yOffset = yOffset,
+                .zOffset = zOffset,
+                .perLine = perLine,
+                .selected = null,
+                .index = 0,
+            };
+        }
+
+        pub fn next(ptr: *anyopaque, infos: []CharInfo) ?[]CharInfo {
+            const self: *Iter = @ptrCast(@alignCast(ptr));
+
+            if (self.index >= self.blocks.len) return null;
+            defer self.index += 1;
+
+            const block = &self.blocks[self.index];
+            const line = self.index / self.perLine;
+            const col = self.index % self.perLine;
+
+            var len: u32 = 0;
+
+            const colOffset: u32 = col * (self.width / self.perLine);
+            const lineOffset: u32 = line * self.generator.font.height;
+            var xOffset: u32 = 0;
+
+            for (block.content) |c| {
+                defer len += 1;
+
+                var info = self.generator.get(c) catch return null;
+
+                info.transform = info.transform.translate(.{@floatFromInt(@as(i32, @intCast(colOffset + xOffset)) + self.xOffset), @floatFromInt(-@as(i32, @intCast(lineOffset)) + self.yOffset), @floatFromInt(self.zOffset)});
+                infos[len] = info;
+
+                xOffset += info.advance;
+            }
+
+            return infos[0..len];
+        }
+    };
+
+    const Block = struct {
+        content: []u8,
+    };
+
+    pub fn init(self: *Popup, allocator: Allocator) error{OutOfMemory}!void {
+        self.blocks = try ArrayList(Block).initCapacity(allocator, 10);
+        self.bytes = try allocator.alloc(u8, 1024);
+        self.index = 0;
+    }
+
+    pub fn insert(self: *Popup, content: []const u8) error{OutOfMemory}!void {
+        defer self.len += @intCast(content.len);
+        const bytes = self.bytes[self.len..self.len + content.len];
+
+        @memcpy(bytes, content);
+
+        try self.blocks.append(.{.content = bytes});
+    }
+
+    pub fn lines(self: *const Popup, perLine: u32) u32 {
+        return @intCast((self.blocks.items.len / perLine) + 1);
+    }
+
+    pub fn iter(self: *Popup, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) CharIter {
+        self.iterHandler = Iter.new(self.blocks.items, width, height, xOffset, yOffset, zOffset, perLine, generator);
+
+        return .{
+            .ptr = &self.iterHandler,
+            .nextFn = Iter.next,
+        };
+    }
+
+    pub fn reset(self: *Popup) void {
+        self.blocks.clearRetainingCapacity();
+        self.index = 0;
+        self.len = 0;
+    }
+};
+
 pub const CharInfo = struct {
     transform: Matrix(4),
     char: u8,
     advance: u16,
     id: ?u32,
+};
+
+pub const CharIter = struct {
+    ptr: *anyopaque,
+    nextFn: *const fn (*anyopaque, []CharInfo) ?[]CharInfo,
+
+    pub fn next(self: *const CharIter, infos: []CharInfo) ?[]CharInfo {
+        return self.nextFn(self.ptr, infos);
+    } 
 };
 
 pub const GlyphGenerator = struct {

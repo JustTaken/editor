@@ -8,14 +8,11 @@ const EVDEV_SCANCODE_OFFSET: u32 = 8;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 
-// const Keys = std.EnumSet(Key);
-
 pub const Xkbcommon = struct {
     context: *xkb.xkb_context,
     keymap: *xkb.xkb_keymap,
     state: *xkb.xkb_state,
 
-    // keys: Keys,
     last: ?Key,
 
     keyArray: ArrayList(Key),
@@ -32,7 +29,6 @@ pub const Xkbcommon = struct {
 
     time: isize,
     repeating: bool,
-    // working: bool,
 
     initialized: bool,
 
