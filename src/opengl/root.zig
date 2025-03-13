@@ -36,8 +36,6 @@ pub const OpenGL = struct {
         EglSurfaceAttribute,
     };
 
-    /// Initializes opengl context with EGL library using the passed wayland
-    /// display and surface.
     pub fn init(
         self: *OpenGL,
         width: u32,
@@ -57,7 +55,6 @@ pub const OpenGL = struct {
             }
         }
 
-        // Egl configuration attributes, enabling attributes has to be done here.
         const aglAttributes = [_]egl.EGLint{
             egl.EGL_SURFACE_TYPE,    egl.EGL_WINDOW_BIT,
             egl.EGL_RENDERABLE_TYPE, egl.EGL_OPENGL_BIT,
@@ -108,8 +105,6 @@ pub const OpenGL = struct {
             }
         }
 
-        // Specifies the current opengl version, and the core profile to enforce the "new"
-        // opengl api usage
         const contextAttributes = [_]egl.EGLint{
             egl.EGL_CONTEXT_MAJOR_VERSION,       4,
             egl.EGL_CONTEXT_MINOR_VERSION,       6,
@@ -137,12 +132,9 @@ pub const OpenGL = struct {
 
         gl.loadExtensions(void, getProcAddress) catch return Error.EglLoadingExtensions;
 
-        // Enabling debug in my experience has to be a two factor process, first enable the
-        // `debug_output` then enable `debug_output_synchronous`
         gl.enable(.debug_output);
         gl.enable(.debug_output_synchronous);
 
-        // Enable clockwise front face orientation
         gl.enable(.cull_face);
 
         gl.enable(.depth_test);
@@ -150,9 +142,6 @@ pub const OpenGL = struct {
 
         gl.enable(.blend);
         gl.blendFunc(.src_alpha, .one_minus_src_alpha);
-
-        // Font bitmaps may not be aligned to 4
-        // bytes as opengl might enforce by default
         gl.pixelStore(.unpack_alignment, 1);
 
         gl.debugMessageCallback({}, errorCallback);
@@ -162,13 +151,10 @@ pub const OpenGL = struct {
 
         gl.viewport(0, 0, width, height);
         gl.scissor(0, 0, width, height);
-        gl.clearColor(224.0 / 255.0, 122.0 / 255.0, 95.0 / 255.0, 1.0);
+        gl.clearColor(0.0 / 255.0, 0.0 / 255.0, 0.0 / 255.0, 255.0 / 255.0);
     }
 
     pub fn render(self: *OpenGL) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
-        // Opengl is working with double buffering, so the back buffer is the one that the
-        // previous draw calls rendered to, now to show this pixel buffer into the screen
-        // swaping with the current shwoing one is neede.
         if (egl.eglSwapBuffers(self.display, self.surface) != egl.EGL_TRUE) {
             switch (egl.eglGetError()) {
                 egl.EGL_BAD_DISPLAY => return error.InvalidDisplay,
@@ -178,12 +164,9 @@ pub const OpenGL = struct {
             }
         }
 
-        // Clear the current back buffer, in other words, the buffer that was beeing display just
-        // before the previous call to eglSwapBuffers, now it is blank.
         gl.clear(.{ .color = true, .depth = true });
     }
 
-    /// Called when window display change the size, so opengl needs to change its scissor and viewport
     pub fn resizeListener(ptr: *anyopaque, width: u32, height: u32) void {
         const self: *OpenGL = @ptrCast(@alignCast(ptr));
 
@@ -203,7 +186,6 @@ pub const OpenGL = struct {
     pub fn deinit(self: *OpenGL) void {
         if (egl.eglMakeCurrent(self.display, egl.EGL_NO_SURFACE, egl.EGL_NO_SURFACE, egl.EGL_NO_CONTEXT) != egl.EGL_TRUE) std.log.err("Failed to unbound egl context", .{});
         if (egl.EGL_TRUE != egl.eglDestroyContext(self.display, self.context)) std.log.err("Failed to destroy egl context", .{});
-
         if (egl.EGL_TRUE != egl.eglDestroySurface(self.display, self.surface)) std.log.err("Failed to destroy egl surface", .{});
 
         self.window.destroy();

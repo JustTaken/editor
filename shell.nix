@@ -4,6 +4,7 @@ in
 pkgs.mkShell {
   packages = with pkgs; [
     (callPackage "/home/joao/.local/share/projects/builds/kak" {})
+    emacs30-pgtk
     helix
     git
     zig

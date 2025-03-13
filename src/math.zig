@@ -7,6 +7,10 @@ pub fn rad(degree: f32) f32 {
     return TO_RAD * degree;
 }
 
+const MIN_COORD: f32 = -1.0;
+const MAX_COORD: f32 = 1.0;
+const COORD_RANGE: f32 = MAX_COORD - MIN_COORD;
+
 pub fn Vec(comptime N: u32) type {
     return struct {
         data: [N]f32,
@@ -138,6 +142,7 @@ pub fn Matrix(comptime N: u32) type {
         data: [N][N]f32,
 
         const Self = @This();
+        const IDENTITY = Self.identity();
 
         pub fn value(self: Self) [N][N]f32 {
             return self.data;
@@ -205,7 +210,7 @@ pub fn Matrix(comptime N: u32) type {
             var result = self;
 
             for (0..N - 1) |i| {
-                result.data[i][N - 1] = self.data[i][N - 1] + data[i];
+                result.data[i][N - 1] = self.data[i][N - 1] + (data[i] * COORD_RANGE);
             }
 
             return result;
@@ -215,9 +220,9 @@ pub fn Matrix(comptime N: u32) type {
             if (N != 4) @compileError("TODO: create that type of matrix for other dimention than 4");
 
             return self.mult(.{ .data = .{
-                .{ 2.0 / (right - left), 0.0, 0.0, -(right + left) / (right - left) },
-                .{ 0.0, 2.0 / (top - bottom), 0.0, (top + bottom) / (top - bottom) },
-                .{ 0.0, 0.0, -2.0 / (far - near), (far + near) / (far - near) },
+                .{ (2.0 / COORD_RANGE) / (right - left), 0.0, 0.0, -(right + left) / (right - left) },
+                .{ 0.0, (2.0 / COORD_RANGE) / (top - bottom), 0.0, (top + bottom) / (top - bottom) },
+                .{ 0.0, 0.0, -(2.0 / COORD_RANGE) / (far - near), (far + near) / (far - near) },
                 .{ 0.0, 0.0, 0.0, 1.0 },
             } });
         }

@@ -7,7 +7,7 @@ const Renderer = @import("opengl/root.zig").OpenGL;
 const Display = @import("wayland.zig").Wayland;
 const Painter = @import("painter.zig").Painter;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
-const NEAR: f32 = 1;
+const NEAR: f32 = 0;
 const FAR: f32 = 10;
 const SIZE: u16 = 24;
 const SCALE: f32 = 1.0;
@@ -16,21 +16,9 @@ const CHAR_COUNT: u32 = 92;
 const INSTANCE_MAX: u32 = 1024 * 8;
 
 pub const Window = struct {
-    /// Wayland abstraction fr creating a surface and a seat, the later is for handling
-    /// keyboard and mouse input. This is responsible for sending resize events for every
-    /// componenet that is registred in the resize event.
     display: Display,
-
-    /// Setup opengl for beeing able to create a shader element when passing a
-    /// shader file, for example "assets/vertex.glsl" and "assets/fragment.glsl"
     renderer: Renderer,
-
-    /// Manage and draw ui elements every time one of its elements
-    /// changes.
     painter: Painter,
-
-    /// Take input from keyboard and send for every one
-    /// registered every time it ticks the associated repeat or delay.
     input: Input,
 
     running: bool,
@@ -56,7 +44,6 @@ pub const Window = struct {
             .width = width,
             .height = height,
             .size = SIZE,
-            .scale = SCALE,
             .instanceMax = INSTANCE_MAX,
             .charKindMax = CHAR_COUNT,
             .near = NEAR,
@@ -73,10 +60,6 @@ pub const Window = struct {
         try self.commit();
     }
 
-    /// Needs to be called every frame so it can round trip the wayland componenet
-    /// and receives updatess from the compositor.
-    /// Parallel to that this function performs the drawing of the next frame if the painter
-    /// componenet says it has changed, otherwise it just updates the input handler timer.
     pub fn draw(self: *Window) error{Fail}!void {
         defer sleep(60);
         const time = std.time.Instant.now() catch return error.Fail;
@@ -91,15 +74,12 @@ pub const Window = struct {
 
         self.commit() catch return error.Fail;
 
-        const end = std.time.Instant.now() catch return error.Fail; 
+        const end = std.time.Instant.now() catch return error.Fail;
         const elapsed = end.since(time);
-        // _ = elapsed;
 
         std.log.info("time: {} ns -> {} ms", .{elapsed, elapsed / std.time.ns_per_ms});
     }
 
-    /// Meat to be a wayland wrapper around the commit action and prior to the commit it performs the
-    /// renderer necessary work to commit the next changes
     fn commit(self: *Window) error{ InvalidDisplay, InvalidSurface, ContextLost, SwapBuffers }!void {
         try self.renderer.render();
         self.display.surface.commit();
