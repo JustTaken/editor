@@ -9,7 +9,6 @@ const Map = std.AutoArrayHashMap;
 const Matrix = @import("math.zig").Matrix;
 const Buffer = @import("opengl/buffer.zig").Buffer;
 const FreeType = @import("font.zig").FreeType;
-const Char = @import("font.zig").Char;
 const Texture = @import("opengl/texture.zig").Texture;
 
 const IDENTITY = Matrix(4).identity();
@@ -26,6 +25,7 @@ pub const RangeIter = struct {
 
     xPosOffset: i32,
     yPosOffset: i32,
+    zPosOffset: i32,
 
     width: u32,
     height: u32,
@@ -40,6 +40,7 @@ pub const RangeIter = struct {
         prevYOffset: *u32,
         xPosOffset: i32,
         yPosOffset: i32,
+        zPosOffset: i32,
         cursor: Cursor,
         currentLine: *LineNode,
         generator: *GlyphGenerator,
@@ -47,7 +48,7 @@ pub const RangeIter = struct {
         const yPosRange = cursor.y * generator.font.height;
         var yOffset = prevYOffset.*;
 
-        while (yOffset + height < yPosRange) {
+        while (yOffset + height < yPosRange + generator.font.height) {
             yOffset += generator.font.height;
         }
 
@@ -71,19 +72,6 @@ pub const RangeIter = struct {
 
             currentBuffer = b.next;
         }
-
-        // outer: while (currentBuffer) |b| {
-        //     for (b.data.handle[0..b.data.len]) |c| {
-        //         if (xOffset <= xPosRange) break :outer;
-
-        //         const info = generator.get(c) catch return null;
-        //         xOffset -= info.advance;
-        //         @panic("TODO");
-        //     }
-
-        //     currentBuffer = b.next;
-        // }
-
 
         currentBuffer = currentLine.data.buffer.first;
         var xOffset: u32 = prevXOffset.*;
@@ -112,7 +100,7 @@ pub const RangeIter = struct {
             lineIndex -= 1;
         }
 
-        const cursorTransform = IDENTITY.translate(.{@floatFromInt(@as(i32, @intCast(xPosRange - xOffset)) + xPosOffset), @as(f32, @floatFromInt(-@as(i32, @intCast(yPosRange - yOffset)) + yPosOffset)), 0});
+        const cursorTransform = IDENTITY.translate(.{@floatFromInt(@as(i32, @intCast(xPosRange - xOffset)) + xPosOffset), @as(f32, @floatFromInt(-@as(i32, @intCast(yPosRange - yOffset)) + yPosOffset)), @floatFromInt(zPosOffset)});
 
         prevYOffset.* = yOffset;
         prevXOffset.* = xOffset;
@@ -127,6 +115,7 @@ pub const RangeIter = struct {
             .startXOffset = xOffset,
             .xPosOffset = xPosOffset,
             .yPosOffset = yPosOffset,
+            .zPosOffset = zPosOffset,
             .cursorTransform = cursorTransform,
             .generator = generator,
         };
@@ -154,7 +143,7 @@ pub const RangeIter = struct {
 
                 const x = @as(i32, @intCast(xOffset)) - @as(i32, @intCast(self.startXOffset));
 
-                info.transform = info.transform.translate(.{@floatFromInt(x + self.xPosOffset), @floatFromInt(-y + self.yPosOffset), 0});
+                info.transform = info.transform.translate(.{@floatFromInt(x + self.xPosOffset), @floatFromInt(-y + self.yPosOffset), @floatFromInt(self.zPosOffset)});
                 xOffset += @intCast(info.advance);
 
                 infos[len] = info;
@@ -238,7 +227,6 @@ pub const FreePool = struct {
 
     pub fn bufferFromFile(self: *FreePool, path: []const u8) error{OutOfMemory, CannotHandleThisBig, NotFound}!List(LineBuffer) {
         const allocator = self.allocator.allocator();
-        std.log.err("from file before: {} {}", .{self.allocator.end_index, self.allocator.buffer.len});
 
         const content = std.fs.cwd().readFileAlloc(allocator, path, 16 * std.mem.page_size) catch |e| {
             switch (e) {
@@ -267,8 +255,6 @@ pub const FreePool = struct {
             currentBuffer.data.fromBytes(content[start..]);
             list.append(currentBuffer);
         }
-
-        std.log.err("from file after: {} {}", .{self.allocator.end_index, self.allocator.buffer.len});
 
         return list;
     }
@@ -392,6 +378,7 @@ pub const Lines = struct {
         var allocator = FixedBufferAllocator.init(try self.freePool.allocator.allocator().alloc(u8, std.mem.page_size));
         const alloc = allocator.allocator();
         var content = try ArrayList(u8).initCapacity(alloc, 1024);
+        defer content.clearAndFree();
 
         while (line) |l| {
             var buffer = l.data.buffer.first;
@@ -557,10 +544,12 @@ pub const Lines = struct {
         self.cursor.x += @intCast(chars.len);
     }
 
-    pub fn deleteForward(self: *Lines, count: u32) error{OutOfMemory}!void {
+    pub fn deleteForward(self: *Lines, count: u32) void {
         defer self.change = true;
 
-        try self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count);
+        self.deleteBufferNodeCount(self.currentLine, self.currentBuffer, self.cursor.offset, count) catch {
+            std.log.err("Failed to delete {} chars", .{count});
+        };
     }
 
     fn nextBufferOrJoin(self: *Lines, line: *LineNode, buffer: *BufferNode, count: *u32) ?*BufferNode {
@@ -781,7 +770,7 @@ pub const Lines = struct {
         self.lines.append(self.currentLine);
     }
 
-    pub fn rangeIter(self: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, generator: *GlyphGenerator) ?RangeIter {
+    pub fn rangeIter(self: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, generator: *GlyphGenerator) ?RangeIter {
         return RangeIter.new(
             width,
             height,
@@ -789,6 +778,7 @@ pub const Lines = struct {
             &self.yOffset,
             xOffset,
             yOffset,
+            zOffset,
             self.cursor,
             self.currentLine,
             generator,

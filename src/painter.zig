@@ -282,9 +282,9 @@ pub const Painter = struct {
         const float_width: f32 = @floatFromInt(self.width);
         const float_height: f32 = @floatFromInt(self.height);
 
-        self.glyphGenerator.defaultTransform = IDENTITY.scale(.{size, size, 1, 1}).translate(.{font_width, -(font_height / 2), 2}); // @WARNING font_width do not reflect the right size of every char, it is just the bounding box of a maximun char size, so this x translation is wrong
+        self.glyphGenerator.defaultTransform = IDENTITY.scale(.{size, size, 1, 1}).translate(.{font_width, -(font_height / 2), 1}); // @WARNING font_width do not reflect the right size of every char, it is just the bounding box of a maximun char size, so this x translation is wrong
         self.cursorScale = IDENTITY.scale(.{font_width, font_height, 1, 1}).translate(.{font_width / 2, -(font_height / 2), 1});
-        self.commandLineBackScale = IDENTITY.scale(.{float_width, font_height, 1, 1}).translate(.{float_width / 2, font_height / 2 - float_height, 0});
+        self.commandLineBackScale = IDENTITY.scale(.{float_width, font_height, 1, 1}).translate(.{float_width / 2, font_height / 2 - float_height, 2});
 
         self.updateView(IDENTITY);
         self.updateProjection(IDENTITY.ortographic(0, float_width, 0, float_height, 0, 10.0));
@@ -332,8 +332,8 @@ pub const Painter = struct {
         return true;
     }
 
-    fn putLines(self: *Painter, lines: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32) error{ Max, CharNotFound, OutOfMemory }!Matrix(4) {
-        var iter = lines.rangeIter(width, height, xOffset, yOffset, &self.glyphGenerator) orelse return error.Max;
+    fn putLines(self: *Painter, lines: *Lines, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32) error{ Max, CharNotFound, OutOfMemory }!Matrix(4) {
+        var iter = lines.rangeIter(width, height, xOffset, yOffset, zOffset, &self.glyphGenerator) orelse return error.Max;
 
         var infoArray: [100]CharInfo = undefined;
         while (iter.nextLine(&infoArray)) |infos| {
@@ -354,13 +354,13 @@ pub const Painter = struct {
 
         self.resetInstances();
 
-        const bufferCursorTransform = try self.putLines(textBuffer, self.width, self.height, 0, 0);
-        const commandLineCursorTransform = try self.putLines(&self.commandLine, self.width, self.glyphGenerator.font.height, 0, -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)));
+        const bufferCursorTransform = try self.putLines(textBuffer, self.width, self.height - self.glyphGenerator.font.height, 0, 0, 0);
+        const commandLineCursorTransform = try self.putLines(&self.commandLine, self.width, self.glyphGenerator.font.height, 0, -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)), 2);
 
         const cursorTransform = if (self.focus == .TextBuffer) bufferCursorTransform else commandLineCursorTransform;
 
         try self.insertInstance(cursorTransform.mult(self.cursorScale), .{1, 1, 0.0, 1});
-        try self.insertInstance(self.commandLineBackScale, .{1, 0, 0, 1});
+        try self.insertInstance(self.commandLineBackScale, .{0.5, 0.5, 0.5, 1});
 
         self.solidCount = self.instanceCount - self.charCount;
 
@@ -383,7 +383,7 @@ pub const Painter = struct {
                     .LowerF => textBuffer.moveFoward(1),
                     .LowerN => textBuffer.moveLineDown(1),
                     .LowerP => textBuffer.moveLineUp(1),
-                    .LowerD => textBuffer.deleteForward(1) catch return,
+                    .LowerD => textBuffer.deleteForward(1),
                     .LowerA => textBuffer.lineStart(),
                     .LowerE => textBuffer.lineEnd(),
                     .LowerS => textBuffer.save() catch return,
@@ -399,7 +399,7 @@ pub const Painter = struct {
                 if (controlActive) switch (key) {
                     .LowerB => self.commandLine.moveBack(1),
                     .LowerF => self.commandLine.moveFoward(1),
-                    .LowerD => self.commandLine.deleteForward(1) catch return,
+                    .LowerD => self.commandLine.deleteForward(1),
                     .LowerA => self.commandLine.lineStart(),
                     .LowerE => self.commandLine.lineEnd(),
                     else => {},
