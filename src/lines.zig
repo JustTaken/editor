@@ -96,20 +96,27 @@ pub const FreePool = struct {
         var start: u16 = 0;
         for (content, 0..) |c, i| {
             if (c == '\n') {
-                const currentBuffer = try allocator.create(BufferNode);
-                currentBuffer.data.fromBytes(content[start..i]);
+                const currentBuffer = try self.newBuffer();
 
+                currentBuffer.data.fromBytes(content[start..i]);
                 list.append(currentBuffer);
                 start = @intCast(i + 1);
             }
         }
 
         if (start != content.len) {
-            const currentBuffer = try allocator.create(BufferNode);
-
+            const currentBuffer = try self.newBuffer();
             currentBuffer.data.fromBytes(content[start..]);
             list.append(currentBuffer);
         }
+
+        // var currentBuffer = list.first;
+
+        // while (currentBuffer) |b| {
+            // std.debug.print("{s}\n", .{b.data.handle[0..b.data.len]});
+
+            // currentBuffer = b.next;
+        // }
 
         return list;
     }
@@ -362,12 +369,11 @@ pub const Lines = struct {
 
         var currentBuffer = buffers.first;
         while (currentBuffer) |buffer| {
+            currentBuffer = buffer.next;
             const line = try self.freePool.newLine();
 
             line.data.buffer.append(buffer);
             self.lines.append(line);
-
-            currentBuffer = buffer.next;
         }
 
         self.currentLine = self.lines.first.?;
@@ -383,10 +389,11 @@ pub const Lines = struct {
     pub fn save(self: *Lines) error{Write, NotFound, OutOfMemory}!void {
         var line = self.lines.first;
 
-        var allocator = FixedBufferAllocator.init(try self.freePool.allocator.allocator().alloc(u8, std.mem.page_size));
+        var allocator = FixedBufferAllocator.init(try self.freePool.allocator.allocator().alloc(u8, 1024 * 1024));
+        defer self.freePool.allocator.end_index -= allocator.buffer.len;
+
         const alloc = allocator.allocator();
         var content = try ArrayList(u8).initCapacity(alloc, 1024);
-        defer content.clearAndFree();
 
         while (line) |l| {
             var buffer = l.data.buffer.first;
@@ -403,6 +410,7 @@ pub const Lines = struct {
 
         const file = std.fs.cwd().createFile(self.name[0..self.nameLen], .{}) catch return error.NotFound;
         file.writeAll(content.items) catch return error.Write;
+        std.log.info("file save: {s}", .{self.name[0..self.nameLen]});
     }
 
     fn reset(self: *Lines) void {
@@ -807,8 +815,71 @@ pub const Lines = struct {
     }
 };
 
+pub const Label = struct {
+    content: []u8,
+    capacity: usize,
+
+    pub const Align = enum {
+        Left,
+        Right,
+    };
+
+    pub fn init(self: *Label, capacity: usize, initialContent: []const u8, allocator: Allocator) error{OutOfMemory}!void {
+        self.content = try allocator.alloc(u8, capacity);
+        self.content.len = 0;
+        self.capacity = capacity;
+
+        try self.insert(initialContent);
+    }
+
+    pub fn insert(self: *Label, bytes: []const u8) error{OutOfMemory}!void {
+        if (bytes.len > self.capacity) return error.OutOfMemory;
+        self.content.len = bytes.len;
+
+        @memcpy(self.content, bytes);
+    }
+
+    fn fromBytes(bytes: []u8) Label {
+        return .{
+            .content = bytes,
+            .capacity = bytes.len,
+        };
+    }
+
+    pub fn chars(self: *const Label, width: u32, alignment: Align, xOffset: i32, yOffset: i32, zOffset: i32, infos: []CharInfo, generator: *GlyphGenerator) ?[]CharInfo {
+        if (self.content.len == 0) return infos[0..0];
+
+        const iWidth: i32 = @intCast(width);
+        var xAdvance: i32 = 0;
+        var len: u32 = 0;
+
+        for (0..self.content.len) |i| {
+            const char = self.content[i];
+
+            if (xAdvance >= iWidth) break;
+
+            defer len += 1;
+
+            var info = generator.get(char) catch return null;
+
+            info.transform = info.transform.translate(.{@floatFromInt(xAdvance + xOffset), @floatFromInt(yOffset), @floatFromInt(zOffset)});
+            infos[len] = info;
+
+            xAdvance += @intCast(info.advance);
+        }
+
+        if (alignment == .Right) {
+            for (0..len) |i| {
+                infos[i].transform = infos[i].transform.translate(.{@floatFromInt(iWidth - xAdvance), 0, 0});
+            }
+        }
+
+        return infos[0..len];
+    }
+};
+
 pub const Popup = struct {
-    blocks: ArrayList(Block),
+    blocks: ArrayList(Label),
     index: u32,
 
     bytes: []u8,
@@ -817,7 +888,7 @@ pub const Popup = struct {
     iterHandler: Iter,
 
     pub const Iter = struct {
-        blocks: []Block,
+        blocks: []Label,
         index: u32,
 
         width: u32,
@@ -833,7 +904,7 @@ pub const Popup = struct {
 
         generator: *GlyphGenerator,
 
-        fn new(blocks: []Block, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) Iter {
+        fn new(blocks: []Label, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) Iter {
             return .{
                 .blocks = blocks,
                 .generator = generator,
@@ -857,34 +928,15 @@ pub const Popup = struct {
             const block = &self.blocks[self.index];
             const line = self.index / self.perLine;
             const col = self.index % self.perLine;
+            const colOffset: i32 = @intCast(col * (self.width / self.perLine));
+            const lineOffset: i32 = @intCast(line * self.generator.font.height);
 
-            var len: u32 = 0;
-
-            const colOffset: u32 = col * (self.width / self.perLine);
-            const lineOffset: u32 = line * self.generator.font.height;
-            var xOffset: u32 = 0;
-
-            for (block.content) |c| {
-                defer len += 1;
-
-                var info = self.generator.get(c) catch return null;
-
-                info.transform = info.transform.translate(.{@floatFromInt(@as(i32, @intCast(colOffset + xOffset)) + self.xOffset), @floatFromInt(-@as(i32, @intCast(lineOffset)) + self.yOffset), @floatFromInt(self.zOffset)});
-                infos[len] = info;
-
-                xOffset += info.advance;
-            }
-
-            return infos[0..len];
+            return block.chars(self.width, .Left, colOffset + self.xOffset, self.yOffset - lineOffset, self.zOffset, infos, self.generator);
         }
     };
 
-    const Block = struct {
-        content: []u8,
-    };
-
     pub fn init(self: *Popup, allocator: Allocator) error{OutOfMemory}!void {
-        self.blocks = try ArrayList(Block).initCapacity(allocator, 10);
+        self.blocks = try ArrayList(Label).initCapacity(allocator, 10);
         self.bytes = try allocator.alloc(u8, 1024);
         self.index = 0;
     }
@@ -895,11 +947,13 @@ pub const Popup = struct {
 
         @memcpy(bytes, content);
 
-        try self.blocks.append(.{.content = bytes});
+        try self.blocks.append(Label.fromBytes(bytes));
     }
 
     pub fn lines(self: *const Popup, perLine: u32) u32 {
-        return @intCast((self.blocks.items.len / perLine) + 1);
+        const count: u32 = @intCast(self.blocks.items.len / perLine);
+        const lastLineHasElements: u32 = @intFromBool((self.blocks.items.len % perLine) > 0);
+        return count + lastLineHasElements;
     }
 
     pub fn iter(self: *Popup, width: u32, height: u32, xOffset: i32, yOffset: i32, zOffset: i32, perLine: u32, generator: *GlyphGenerator) CharIter {

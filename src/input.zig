@@ -114,7 +114,7 @@ pub const Xkbcommon = struct {
     }
 
     pub fn isAltPressed(self: *const Xkbcommon) bool {
-        return xkb.xkb_state_mod_index_is_active(self.state, self.altIndex, xkb.XKB_STATE_LAYOUT_EFFECTIVE) != 0;
+        return xkb.xkb_state_mod_index_is_active(self.state, self.altIndex, xkb.XKB_STATE_MODS_DEPRESSED) != 0;
     }
 
     pub fn reset(self: *Xkbcommon) void {

@@ -11,6 +11,7 @@ const Buffer = @import("opengl/buffer.zig").Buffer;
 const Mesh = @import("opengl/mesh.zig").Mesh;
 const Lines = @import("lines.zig").Lines;
 const Popup = @import("lines.zig").Popup;
+const Label = @import("lines.zig").Label;
 const FreePool = @import("lines.zig").FreePool;
 const CharInfo = @import("lines.zig").CharInfo;
 const Iter = @import("lines.zig").CharIter;
@@ -39,6 +40,7 @@ pub const Painter = struct {
 
     textBuffers: List(Lines),
     commandLine: Lines,
+    commandLineRight: Label,
     popup: Popup,
     focus: Focus,
 
@@ -130,9 +132,15 @@ pub const Painter = struct {
         try currentBuffer.data.init(&self.freePool);
         try self.commandLine.init(&self.freePool);
         try self.popup.init(allocator);
+        try self.commandLineRight.init(100, "0:0", allocator);
 
         self.textBuffers.append(currentBuffer);
-        self.commandHandler = try CommandHandler.new(&.{ Command.withFunction("edit", .Path, editCommand)}, allocator);//.{ .name = "edit", .f = editCommand }}, allocator);
+        self.commandHandler = try CommandHandler.new(self, &.{
+            try Command.withSubCommands("edit", &.{
+                Command.withFunction("file", .Path, editFileCommand),
+                Command.withFunction("buffer", .Buffer, editBufferCommand),
+            }, allocator),
+        }, allocator);
 
         self.focus = .TextBuffer;
 
@@ -148,13 +156,43 @@ pub const Painter = struct {
         if (controlActive or altActive) self.processWithModifiers(key, controlActive, altActive) else self.processKey(key);
     }
 
-    fn focusTextBuffer(self: *Painter) void {
-        if (self.focus != .CommandLine) return;
+    fn processWithModifiers(self: *Painter, key: Key, controlActive: bool, altActive: bool) void {
+        switch (self.focus) {
+            .TextBuffer => {
+                const textBuffer = &self.textBuffers.last.?.data;
 
-        self.commandLine.clear();
-        self.commandHandler.reset();
-        self.popup.reset();
-        self.focus = .TextBuffer;
+                if (controlActive) switch (key) {
+                    .LowerB => textBuffer.moveBack(1),
+                    .LowerF => textBuffer.moveFoward(1),
+                    .LowerN => textBuffer.moveLineDown(1),
+                    .LowerP => textBuffer.moveLineUp(1),
+                    .LowerD => textBuffer.deleteForward(1),
+                    .LowerA => textBuffer.lineStart(),
+                    .LowerE => textBuffer.lineEnd(),
+                    .LowerS => textBuffer.save() catch return,
+                    .Space => textBuffer.toggleSelection(),
+                    .Enter => {
+                        self.focus = .CommandLine;
+                        self.commandLine.change = true;
+                    },
+                    else => {},
+                } else if (altActive) switch (key) {
+                    .LowerN => textBuffer.moveLineDown(10),
+                    .LowerP => textBuffer.moveLineUp(10),
+                    else => {},
+                };
+            },
+            .CommandLine => {
+                if (controlActive) switch (key) {
+                    .LowerB => self.commandLine.moveBack(1),
+                    .LowerF => self.commandLine.moveFoward(1),
+                    .LowerD => self.commandLine.deleteForward(1),
+                    .LowerA => self.commandLine.lineStart(),
+                    .LowerE => self.commandLine.lineEnd(),
+                    else => {},
+                };
+            },
+        }
     }
 
     fn processKeyCommand(self: *Painter, key: Key) void {
@@ -167,7 +205,18 @@ pub const Painter = struct {
             .Enter => {
                 switch (self.focus) {
                     .TextBuffer => self.textBuffers.last.?.data.newLine() catch return,
-                    .CommandLine => self.focusTextBuffer(),
+                    .CommandLine => {
+                        var stringBuffer: [100]u8 = undefined;
+                        const string = self.commandLine.lines.first.?.data.write(&stringBuffer);
+                        var iter = std.mem.splitSequence(u8, string, " ");
+
+                        if(self.commandHandler.getCommandFunction(null, &iter)) |f| {
+                            const success = f(self, &iter);
+                            _ = success;
+                        }
+
+                        self.focusTextBuffer();
+                    },
                 }
             },
             else => {},
@@ -175,18 +224,40 @@ pub const Painter = struct {
     }
 
     fn processKey(self: *Painter, key: Key) void {
-        const i: u32 = @intFromEnum(key);
+        const char: u32 = @intFromEnum(key);
 
-        if (i > Key.NON_DISPLAYABLE) {
+        if (char > Key.NON_DISPLAYABLE) {
             self.processKeyCommand(key);
 
             return;
         }
 
         switch (self.focus) {
-            .TextBuffer => self.textBuffers.last.?.data.insertChar(@intCast(i)) catch return,
-            .CommandLine => self.writeToCommandLine(i) catch return,
+            .TextBuffer => self.writeToBuffer(char) catch return,//
+            .CommandLine => self.writeToCommandLine(char) catch return,
         }
+    }
+
+    fn focusTextBuffer(self: *Painter) void {
+        if (self.focus != .CommandLine) return;
+
+        self.commandLine.clear();
+        self.commandHandler.reset();
+        self.popup.reset();
+        self.focus = .TextBuffer;
+    }
+
+    fn updateRightLabel(self: *Painter) error{OutOfMemory}!void {
+        const buffer = &self.textBuffers.last.?.data;
+        var content: [100]u8 = undefined;
+
+        const location = std.fmt.bufPrint(&content, "{d}:{d}", .{buffer.cursor.y, buffer.cursor.x}) catch return error.OutOfMemory;
+        try self.commandLineRight.insert(location);
+    }
+
+    fn writeToBuffer(self: *Painter, char: u32) error{OutOfMemory}!void {
+        const buffer = &self.textBuffers.last.?.data;
+        try buffer.insertChar(@intCast(char));
     }
 
     fn writeToCommandLine(self: *Painter, char: u32) error{OutOfMemory}!void {
@@ -195,7 +266,9 @@ pub const Painter = struct {
         var content: [100]u8 = undefined;
 
         const command = self.commandLine.currentLine.data.write(&content);
-        try self.commandHandler.updateCandidates(command);
+        var iter = std.mem.splitSequence(u8, command, " ");
+
+        try self.commandHandler.updateCandidates(null, &iter);
 
         self.popup.reset();
 
@@ -222,6 +295,8 @@ pub const Painter = struct {
 
         self.updateView(IDENTITY);
         self.updateProjection(IDENTITY.ortographic(0, float_width, 0, float_height, 0, 10.0));
+
+        self.commandLine.change = true;
     }
 
     pub fn resizeListen(ptr: *anyopaque, width: u32, height: u32) void {
@@ -276,8 +351,18 @@ pub const Painter = struct {
         }
     }
 
+    fn putLabel(self: *Painter, label: *const Label, width: u32, aligment: Label.Align, xOffset: i32, yOffset: i32, zOffset: i32) error{OutOfMemory}!void {
+        var infoArray: [100]CharInfo = undefined;
+
+        if (label.chars(width, aligment, xOffset, yOffset, zOffset, &infoArray, &self.glyphGenerator)) |chars| {
+            for (chars) |i| {
+                try self.insertChar(i, .{1, 1, 1, 1});
+            }
+        }
+    }
+
     fn putPopup(self: *Painter, popup: *Popup) error{ OutOfMemory }!void {
-        if (self.popup.blocks.items.len > 0) {
+        if (popup.blocks.items.len > 0) {
             const lines = self.popup.lines(4);
             const height = lines * self.glyphGenerator.font.height;
             const yOffset: i32 = @intCast(self.height - (height + self.glyphGenerator.font.height));
@@ -296,8 +381,11 @@ pub const Painter = struct {
 
         self.resetInstances();
 
+        try self.updateRightLabel();
+
         try self.putCharIter(textBuffer.iter(self.width, self.height - self.glyphGenerator.font.height, 0, 0, 0, &self.glyphGenerator));
         try self.putCharIter(self.commandLine.iter(self.width, self.glyphGenerator.font.height, 0, -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)), 1, &self.glyphGenerator));
+        try self.putLabel(&self.commandLineRight, self.width, .Right, -@as(i32, @intCast(self.glyphGenerator.font.width)), -@as(i32, @intCast(self.height - self.glyphGenerator.font.height)), 1);
         try self.putPopup(&self.popup);
 
         const cursorTransform = switch (self.focus) {
@@ -315,43 +403,6 @@ pub const Painter = struct {
         self.textureIndices.push();
 
         return true;
-    }
-
-    fn processWithModifiers(self: *Painter, key: Key, controlActive: bool, altActive: bool) void {
-        _ = altActive;
-
-        switch (self.focus) {
-            .TextBuffer => {
-                const textBuffer = &self.textBuffers.last.?.data;
-
-                if (controlActive) switch (key) {
-                    .LowerB => textBuffer.moveBack(1),
-                    .LowerF => textBuffer.moveFoward(1),
-                    .LowerN => textBuffer.moveLineDown(1),
-                    .LowerP => textBuffer.moveLineUp(1),
-                    .LowerD => textBuffer.deleteForward(1),
-                    .LowerA => textBuffer.lineStart(),
-                    .LowerE => textBuffer.lineEnd(),
-                    .LowerS => textBuffer.save() catch return,
-                    .Space => textBuffer.toggleSelection(),
-                    .Enter => {
-                        self.focus = .CommandLine;
-                        self.commandLine.change = true;
-                    },
-                    else => {},
-                };
-            },
-            .CommandLine => {
-                if (controlActive) switch (key) {
-                    .LowerB => self.commandLine.moveBack(1),
-                    .LowerF => self.commandLine.moveFoward(1),
-                    .LowerD => self.commandLine.deleteForward(1),
-                    .LowerA => self.commandLine.lineStart(),
-                    .LowerE => self.commandLine.lineEnd(),
-                    else => {},
-                };
-            },
-        }
     }
 
     fn insertChar(self: *Painter, info: CharInfo, color: [4]f32) error{ OutOfMemory }!void {
@@ -407,6 +458,7 @@ pub const Painter = struct {
 
 const ArgumentKind = enum(u8) {
     Path,
+    Buffer,
     None,
 };
 
@@ -415,8 +467,10 @@ const CommandEndKind = enum(u8) {
     SubCommands,
 };
 
+const CmdFn = *const fn (*Painter, *std.mem.SplitIterator(u8, .sequence)) bool;
+
 const CommandEnd = union(CommandEndKind) {
-    Function: *const fn (*Painter, *std.mem.SplitIterator(u8, .sequence)) void,
+    Function: CmdFn,
     SubCommands: []const Command,
 };
 
@@ -425,7 +479,7 @@ const Command = struct {
     end: CommandEnd,
     argumentKind: ArgumentKind,
 
-    fn withFunction(name: []const u8, argumentKind: ArgumentKind, f: *const fn (*Painter, *std.mem.SplitIterator(u8, .sequence)) void) Command {
+    fn withFunction(name: []const u8, argumentKind: ArgumentKind, f: CmdFn) Command {
         return .{
             .name = name,
             .argumentKind = argumentKind,
@@ -435,12 +489,15 @@ const Command = struct {
         };
     }
 
-    fn withSubCommands(name: []const u8, subcommands: []const Command) Command {
+    fn withSubCommands(name: []const u8, subcommands: []const Command, allocator: Allocator) error{OutOfMemory}!Command {
+        const subs = try allocator.alloc(Command, subcommands.len);
+        @memcpy(subs, subcommands);
+
         return .{
             .name = name,
             .argumentKind = .None,
             .end = .{
-                .SubCommands = subcommands,
+                .SubCommands = subs,
             },
         };
     }
@@ -449,30 +506,32 @@ const Command = struct {
 const CommandHandler = struct {
     commands: ArrayList(Command),
     candidates: ArrayList([]const u8),
-    index: u32,
+    index: ?u32,
 
-    fn new(commands: []const Command, allocator: Allocator) error{OutOfMemory}!CommandHandler {
+    context: *Painter,
+
+    fn new(context: *Painter, commands: []const Command, allocator: Allocator) error{OutOfMemory}!CommandHandler {
         var self: CommandHandler = undefined;
 
+        self.context = context;
         self.candidates = try ArrayList([]const u8).initCapacity(allocator, commands.len);
         self.commands = try ArrayList(Command).initCapacity(allocator, 100);
 
         try self.commands.appendSlice(commands);
-        self.index = 0;
+        self.index = null;
 
         return self;
     }
 
-    fn updateCandidates(self: *CommandHandler, string: []const u8) error{OutOfMemory}!void {
+    fn updateCandidates(self: *CommandHandler, list: ?[]const Command, iter: *std.mem.SplitIterator(u8, .sequence)) error{OutOfMemory}!void {
         self.reset();
 
-        var iter = std.mem.splitSequence(u8, string, " ");
-
         const command = iter.next() orelse return;
+        const commands = list orelse self.commands.items;
 
-        for (self.commands.items) |cmd| {
+        for (commands) |cmd| {
             if (std.mem.startsWith(u8, cmd.name, command)) {
-                if (try self.includeCommand(cmd, &iter)) break;
+                if (try self.includeCommand(cmd, iter)) break;
             }
         }
     }
@@ -486,47 +545,99 @@ const CommandHandler = struct {
                     return false;
                 };
 
-                self.matchArgument(cmd, argument);
+                try self.matchArgument(cmd, argument);
+
                 return true;
             },
             .SubCommands => |cmds| {
-                const argument = iter.next() orelse {
+                _ = iter.peek() orelse {
                     try self.candidates.append(cmd.name);
 
                     return false;
                 };
 
-                for (cmds) |sub| {
-                    if (std.mem.startsWith(u8, sub.name, argument)) {
-                        try self.candidates.append(sub.name);
-                    }
-                }
+                try self.updateCandidates(cmds, iter);
 
                 return true;
             }
         }
     }
 
-    fn matchArgument(self: *CommandHandler, cmd: Command, argument: []const u8) void {
-        _ = self;
+    fn matchArgument(self: *CommandHandler, cmd: Command, argument: []const u8) error{OutOfMemory}!void {
         switch (cmd.argumentKind) {
             .Path => {
-                std.debug.print("trying to open: {s}\n", .{argument});
+                var dirPath: []const u8 = argument[0..0];
+                var filePath: []const u8 = argument[0..];
+
+                for (0..argument.len) |i| {
+                    if (argument[argument.len - i - 1] == '/') {
+                        filePath = argument[argument.len - i..];
+                        dirPath = argument[0..argument.len - i - 1];
+
+                        break;
+                    }
+                }
+
+                var dir = std.fs.cwd();
+                var relativeDirPath: [100]u8 = [_]u8{'.', '/'} ++ ([_]u8{' '} ** 98);
+
+                for (0..dirPath.len) |i| {
+                    relativeDirPath[i + 2] = dirPath[i];
+                }
+
+                dir = dir.openDir(relativeDirPath[0..dirPath.len + 2], .{.iterate = true}) catch |e| {
+                    std.log.err("{s} failed {}", .{relativeDirPath[0..dirPath.len + 2], e});
+                    return;
+                };
+
+                var iter = dir.iterate();
+                while (iter.next() catch return) |path| {
+                    if (std.mem.startsWith(u8, path.name, filePath)) {
+                        try self.candidates.append(path.name);
+                    }
+                }
+            },
+            .Buffer => {
+                var buffer = self.context.textBuffers.first;
+
+                while (buffer) |b| {
+                    if (std.mem.startsWith(u8, b.data.name[0..b.data.nameLen], argument)) {
+                        try self.candidates.append(b.data.name[0..b.data.nameLen]);
+                    }
+
+                    buffer = b.next;
+                }
             },
             .None => {}
         }
     }
 
+    fn getCommandFunction(self: *const CommandHandler, list: ?[]const Command, iter: *std.mem.SplitIterator(u8, .sequence)) ?CmdFn {
+        const command = iter.next() orelse return null;
+        const commands = list orelse self.commands.items;
+
+        for (commands) |cmd| {
+            if (std.mem.startsWith(u8, cmd.name, command)) {
+                switch (cmd.end) {
+                    .SubCommands => |cmds| return self.getCommandFunction(cmds, iter),
+                    .Function => |f| return f,
+                }
+            }
+        }
+
+        return null;
+    }
+
     fn reset(self: *CommandHandler) void {
         self.candidates.clearRetainingCapacity();
-        self.index = 0;
+        self.index = null;
     }
 };
 
-fn editCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) void {
+fn editBufferCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) bool {
     const argument_value = it.next() orelse {
         std.log.err("missing argument in edit command", .{});
-        return;
+        return false;
     };
 
     var buffer = painter.textBuffers.first;
@@ -536,15 +647,30 @@ fn editCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) voi
             painter.textBuffers.remove(b);
             painter.textBuffers.append(b);
 
-            return;
+            return true;
         }
 
         buffer = b.next;
     }
 
+    return false;
+}
+
+fn editFileCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) bool {
+    const startIndex = it.index;
+
+    if (editBufferCommand(painter, it)) return true;
+
+    it.index = startIndex;
+
+    const argument_value = it.next() orelse {
+        std.log.err("missing argument in edit command", .{});
+        return false;
+    };
+
     const nextTextBuffer = painter.allocator.allocator().create(LinesNode) catch {
         std.log.err("Out Of memory when opening: {s}", .{argument_value});
-        return;
+        return false;
     };
 
     nextTextBuffer.data.fromFile(&painter.freePool, argument_value) catch |e| {
@@ -552,8 +678,10 @@ fn editCommand(painter: *Painter, it: *std.mem.SplitIterator(u8, .sequence)) voi
 
         std.log.err("Open file: {s}, {}", .{argument_value, e});
 
-        return;
+        return false;
     };
 
     painter.textBuffers.append(nextTextBuffer);
+
+    return true;
 }
