@@ -134,6 +134,7 @@ pub const OpenGL = struct {
 
         gl.enable(.debug_output);
         gl.enable(.debug_output_synchronous);
+        gl.debugMessageCallback({}, errorCallback);
 
         gl.enable(.cull_face);
 
@@ -143,8 +144,6 @@ pub const OpenGL = struct {
         gl.enable(.blend);
         gl.blendFunc(.src_alpha, .one_minus_src_alpha);
         gl.pixelStore(.unpack_alignment, 1);
-
-        gl.debugMessageCallback({}, errorCallback);
 
         self.width = width;
         self.height = height;

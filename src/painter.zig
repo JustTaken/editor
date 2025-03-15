@@ -590,6 +590,8 @@ const CommandHandler = struct {
                     return;
                 };
 
+                defer dir.close();
+
                 var iter = dir.iterate();
                 while (iter.next() catch return) |path| {
                     if (std.mem.startsWith(u8, path.name, filePath)) {
